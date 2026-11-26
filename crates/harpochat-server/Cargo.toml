@@ -18,7 +18,7 @@ name = "harpochat_server"
 path = "src/lib.rs"
 
 [dependencies]
-harpochat-core = { path = "../harpochat-core" }
+harpochat-core = { path = "../harpochat-core", version = "0.1.0" }
 serde = { workspace = true }
 ciborium = { workspace = true }
 serde_bytes = { workspace = true }
