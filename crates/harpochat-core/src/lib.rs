@@ -9,3 +9,10 @@
 //! Contract: `docs/SERVER_SPEC.md`. Design: `docs/superpowers/specs/2026-11-26-harpochat-core-design.md`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+pub mod domain;
+mod error;
+pub mod hash;
+pub mod keys;
+
+pub use error::{CoreError, Result};
