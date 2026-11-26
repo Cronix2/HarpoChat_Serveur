@@ -1,0 +1,34 @@
+[package]
+name = "harpochat-server"
+description = "HarpoChat mesh node: gateway, mix and RAM-only mailbox. Never sees plaintext or who talks to whom."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+default-run = "harpochat-server"
+
+[[bin]]
+name = "harpochat-server"
+path = "src/main.rs"
+
+[lib]
+name = "harpochat_server"
+path = "src/lib.rs"
+
+[dependencies]
+harpochat-core = { path = "../harpochat-core" }
+serde = { workspace = true }
+ciborium = { workspace = true }
+serde_bytes = { workspace = true }
+zeroize = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
