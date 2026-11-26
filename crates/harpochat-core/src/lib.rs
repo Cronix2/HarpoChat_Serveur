@@ -23,5 +23,6 @@ pub mod keys;
 pub mod link;
 pub mod mailbox;
 pub mod signed;
+pub mod sphinx;
 
 pub use error::{CoreError, Result};
