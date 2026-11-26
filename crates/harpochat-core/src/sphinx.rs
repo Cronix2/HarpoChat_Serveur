@@ -40,6 +40,8 @@ pub const MAX_HOPS: usize = sphinx_packet::constants::MAX_PATH_LENGTH;
 pub const MIN_DISTINCT_NODES: usize = 3;
 /// Destination address meaning "deliver to the final node's mailbox service".
 pub const LOCAL_DELIVERY: [u8; 32] = [0; 32];
+/// Largest per-hop delay accepted when building a packet or SURB (one minute).
+pub const MAX_DELAY_MS: u64 = 60_000;
 const SURB_ID_LEN: usize = 16;
 const PAYLOAD_KEY_SEED_LEN: usize = 16;
 
@@ -140,7 +142,11 @@ fn route_nodes(route: &[Hop]) -> Vec<Node> {
 }
 
 fn check_route(route: &[Hop], delays_ms: &[u64]) -> Result<()> {
-    if route.is_empty() || route.len() > MAX_HOPS || delays_ms.len() != route.len() {
+    if route.is_empty()
+        || route.len() > MAX_HOPS
+        || delays_ms.len() != route.len()
+        || delays_ms.iter().any(|d| *d > MAX_DELAY_MS)
+    {
         return Err(CoreError::Malformed);
     }
     Ok(())

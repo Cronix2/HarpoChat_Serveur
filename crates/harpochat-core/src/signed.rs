@@ -87,8 +87,9 @@ impl<T> Eq for Signed<T> {}
 
 impl<T> fmt::Debug for Signed<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The body may hold secrets (e.g. a node invite): print its size only.
         f.debug_struct("Signed")
-            .field("body", &Hex(&self.body))
+            .field("body_len", &self.body.len())
             .field("sig", &Hex(&self.sig))
             .finish()
     }

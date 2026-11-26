@@ -308,4 +308,11 @@ mod tests {
         assert!(!dbg.contains("90,")); // 0x5A as decimal array element
         assert!(!dbg.to_lowercase().contains("5a5a"));
     }
+
+    #[test]
+    fn debug_of_signed_invite_redacts_secret() {
+        let s = SigningKey::from_seed(&[1; 32]);
+        let dbg = format!("{:?}", Signed::sign(&s, &invite(&s)));
+        assert!(!dbg.to_lowercase().contains("5a5a5a5a"), "{dbg}");
+    }
 }

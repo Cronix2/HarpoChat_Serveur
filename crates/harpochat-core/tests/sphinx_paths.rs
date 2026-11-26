@@ -337,3 +337,31 @@ fn subscribe_capacity() {
     assert!(max_surbs_per_subscribe(SizeClass::Small) >= 2);
     assert!(max_surbs_per_subscribe(SizeClass::Large) >= 10);
 }
+
+#[test]
+fn absurd_delay_rejected_without_panic() {
+    let hops: Vec<Hop> = nodes(3).iter().map(TestNode::hop).collect();
+    assert_eq!(
+        build_forward(
+            b"x",
+            &hops,
+            LOCAL_DELIVERY,
+            &[0, u64::MAX, 0],
+            SizeClass::Small,
+            None
+        ),
+        Err(CoreError::Malformed)
+    );
+    let n = nodes(2);
+    assert!(create_surb(&[n[0].hop(), n[1].hop()], [1; 32], [2; 16], &[u64::MAX, 0]).is_err());
+    let max = harpochat_core::sphinx::MAX_DELAY_MS;
+    assert!(build_forward(
+        b"x",
+        &hops,
+        LOCAL_DELIVERY,
+        &[0, max, 0],
+        SizeClass::Small,
+        None
+    )
+    .is_ok());
+}
