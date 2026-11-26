@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bootstrap;
 pub mod cbor;
 pub mod descriptor;
 pub mod directory;
@@ -19,6 +20,7 @@ mod error;
 pub mod hash;
 pub mod invite;
 pub mod keys;
+pub mod link;
 pub mod mailbox;
 pub mod signed;
 
