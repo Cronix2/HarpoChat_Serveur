@@ -8,6 +8,7 @@
 pub mod cli;
 pub mod config;
 pub mod keystore;
+pub mod net;
 pub mod node;
 pub mod service;
 pub mod store;
