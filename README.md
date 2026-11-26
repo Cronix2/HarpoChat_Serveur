@@ -1,63 +1,46 @@
-# HarpoChat — Serveur relais
+# HarpoChat Server
 
-Relais WebSocket haute performance écrit en Rust. Principe : **le serveur ne voit jamais le contenu en clair**. Il achemine des enveloppes chiffrées Signal entre des identités Ed25519.
+Serveur du **mesh HarpoChat** : un réseau de nœuds communautaires qui achemine les messages de
+l'application Android HarpoChat **sans pouvoir les lire ni savoir qui parle à qui** — y compris pour
+l'administrateur du nœud.
 
-## Rôle
+- Le contenu est chiffré de bout en bout par le téléphone avant d'entrer dans le réseau.
+- Les paquets ont tous la même taille, traversent plusieurs nœuds en oignon (format **Sphinx**,
+  modèle **Loopix**) et sont mêlés à du trafic leurre.
+- Un nœud ne garde rien sur disque : les messages en attente vivent en RAM, sous des identifiants
+  de boîtes aux lettres aléatoires qui changent chaque jour.
+- On n'entre dans le mesh que parrainé par un nœud existant.
 
-- Authentifier les clients par challenge/réponse Ed25519 (pas de mot de passe).
-- Stocker temporairement les enveloppes chiffrées destinées aux utilisateurs hors-ligne.
-- Relayer immédiatement aux utilisateurs en ligne.
-- Publier et servir les PreKey bundles (à venir).
+## Documents
 
-## Stack
+| Document | Contenu |
+|---|---|
+| [`docs/SERVER_SPEC.md`](docs/SERVER_SPEC.md) | Contrat client ↔ serveur (exigences) |
+| [`docs/superpowers/specs/2026-11-26-harpochat-core-design.md`](docs/superpowers/specs/2026-11-26-harpochat-core-design.md) | Conception technique |
+| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Plans d'implémentation par phase |
 
-- [Axum](https://github.com/tokio-rs/axum) 0.7 + Tokio 1.x
-- SQLx pour la persistance (SQLite en dev, PostgreSQL en prod)
-- `ed25519-dalek` pour la signature
-- `tracing` + Prometheus pour l'observabilité
+## Organisation
 
-## Build
+```text
+crates/harpochat-core     noyau partagé serveur + Android : formats, Sphinx, boîtes, jetons (pur, sans I/O)
+```
+
+Le binaire `harpochat-server` arrive en phase P3.
+
+## Construire et tester
+
+Prérequis : [Rust](https://rustup.rs) (la version est épinglée dans `rust-toolchain.toml`).
 
 ```bash
-cd server
-cargo build --release
-./target/release/harpo-server
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Variables d'environnement :
+## État
 
-| Variable | Défaut | Description |
-|---|---|---|
-| `HARPO_BIND` | `0.0.0.0:8443` | Adresse d'écoute HTTP/WebSocket |
-| `HARPO_DB` | _(vide)_ | URL SQLite pour mailbox persistante (ex: `sqlite://harpo.db?mode=rwc`). Si vide, mailbox en mémoire. |
-| `RUST_LOG` | `info,harpo_server=debug` | Filtre de logs |
+Phase **P1 en cours** : noyau `harpochat-core` v0.1.
 
-## Endpoints
+## Licence
 
-- `GET /health` → `{"status":"ok"}`
-- `GET /metrics` → format Prometheus
-- `WS /v1/ws` → protocole JSON-framed (voir `harpo-proto`)
-
-## Handshake
-
-```
-Client → Hello { identity, version }
-Server → Challenge { nonce }
-Client → AuthResponse { signature = Ed25519(identity_sk, SHA256("harpochat/v1/auth-challenge" || nonce)) }
-Server → Welcome { session_id }
-```
-
-## Tests
-
-```bash
-cargo test
-```
-
-## Prochaines étapes (roadmap serveur)
-
-- [x] `SqliteMailbox` persistant + migrations SQLx
-- [ ] Publication/récupération de PreKey bundles
-- [ ] Rate limiting par identité (tower-governor)
-- [ ] TLS natif (rustls) + certificats Let's Encrypt
-- [ ] Dockerfile multi-stage produisant un binaire musl ARM64
-- [ ] Métriques détaillées (files d'attente par identité, latence relai, etc.)
+Apache-2.0, voir [`LICENSE`](LICENSE).
