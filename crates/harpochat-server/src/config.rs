@@ -267,11 +267,13 @@ mod tests {
 
     #[test]
     fn bad_root_hex_rejected() {
-        let mut c = Config::default();
-        c.roots = vec![RootConfig {
-            id_pub: "zz".into(),
-            endpoints: vec!["wss://root.example".into()],
-        }];
+        let c = Config {
+            roots: vec![RootConfig {
+                id_pub: "zz".into(),
+                endpoints: vec!["wss://root.example".into()],
+            }],
+            ..Config::default()
+        };
         assert!(matches!(
             c.validate(),
             Err(ConfigError::Invalid { field: "roots", .. })
@@ -316,11 +318,13 @@ mod tests {
 
     #[test]
     fn root_ids_decode() {
-        let mut c = Config::default();
-        c.roots = vec![RootConfig {
-            id_pub: "01".repeat(32),
-            endpoints: vec!["wss://r.example".into()],
-        }];
+        let c = Config {
+            roots: vec![RootConfig {
+                id_pub: "01".repeat(32),
+                endpoints: vec!["wss://r.example".into()],
+            }],
+            ..Config::default()
+        };
         assert_eq!(c.root_ids(), Ok(vec![[1u8; 32]]));
     }
 }
