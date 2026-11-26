@@ -9,3 +9,4 @@ pub mod cli;
 pub mod config;
 pub mod keystore;
 pub mod node;
+pub mod store;
