@@ -10,9 +10,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod cbor;
 pub mod domain;
 mod error;
 pub mod hash;
 pub mod keys;
+pub mod signed;
 
 pub use error::{CoreError, Result};
