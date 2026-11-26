@@ -5,5 +5,7 @@
 //! file (spec §4.1); everything else lives in RAM and dies with the process.
 #![deny(missing_docs)]
 
+pub mod cli;
 pub mod config;
 pub mod keystore;
+pub mod node;
