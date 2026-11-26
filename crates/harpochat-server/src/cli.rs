@@ -198,6 +198,12 @@ fn run(dir: &Path, check: bool) -> i32 {
     if node.config.node.public_endpoints.is_empty() {
         eprintln!("attention : aucune adresse publique, le nœud ne sera pas joignable");
     }
+    if !crate::server::self_check(&node, t) {
+        return fail(
+            EXIT_RUNTIME,
+            "l'annuaire signé par ce nœud ne se vérifie pas",
+        );
+    }
     if check {
         println!("ok: {}", summary(&node));
         return EXIT_OK;
@@ -210,12 +216,24 @@ fn run(dir: &Path, check: bool) -> i32 {
         Ok(rt) => rt,
         Err(e) => return fail(EXIT_RUNTIME, format!("runtime : {e}")),
     };
-    rt.block_on(async {
-        tracing::info!("harpochat-server démarré ({})", summary(&node));
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("arrêt demandé, effacement de l'état en mémoire");
-    });
-    EXIT_OK
+    let addr = node.config.listen.addr.clone();
+    let summary = summary(&node);
+    rt.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => return fail(EXIT_RUNTIME, format!("écoute sur {addr} impossible : {e}")),
+        };
+        tracing::info!("harpochat-server démarré ({summary}), écoute sur {addr}");
+        let shutdown = async {
+            let _ = tokio::signal::ctrl_c().await;
+        };
+        let r = crate::server::serve(node, listener, crate::router::system_clock(), shutdown).await;
+        tracing::info!("arrêt : état en mémoire effacé");
+        match r {
+            Ok(()) => EXIT_OK,
+            Err(e) => fail(EXIT_RUNTIME, e),
+        }
+    })
 }
 
 fn init_logging() {

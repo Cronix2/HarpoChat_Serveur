@@ -11,5 +11,6 @@ pub mod keystore;
 pub mod net;
 pub mod node;
 pub mod router;
+pub mod server;
 pub mod service;
 pub mod store;
