@@ -23,9 +23,10 @@ l'administrateur du nœud.
 
 ```text
 crates/harpochat-core     noyau partagé serveur + Android : formats, Sphinx, boîtes, jetons (pur, sans I/O)
+crates/harpochat-server   binaire du nœud : init, run (réseau en phase P4)
 ```
 
-Le binaire `harpochat-server` arrive en phase P3.
+Installer un nœud : [`docs/operators/install.md`](docs/operators/install.md).
 
 ## Construire et tester
 
@@ -39,7 +40,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## État
 
-Phase **P1 terminée, en attente de revue** : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
+Phases **P1** (noyau) et **P3** (binaire, releases signées) terminées, en revue : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
 
 ## Licence
 
