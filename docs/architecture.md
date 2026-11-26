@@ -1,7 +1,7 @@
 # HarpoChat Server — architecture
 
 > **Pour :** toute personne qui découvre le projet, y compris le jury. Mise à jour à chaque phase.
-> **État :** phases P1 (noyau) et P3 (binaire `harpochat-server`, releases signées) terminées, en revue.
+> **État :** phases P1, P3 et P4 (un nœud joignable, boîtes aux lettres en RAM) terminées, en revue.
 
 ## 1. Le problème
 
@@ -74,7 +74,7 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 | P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé, en revue** |
 | P2 | Bindings Android (uniffi) | à faire |
 | P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
-| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | à faire |
+| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé, en revue** |
 | P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | à faire |
 | P6 | Trafic de couverture, temps réel (M3, M3b) | à faire |
 | P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | à faire |
