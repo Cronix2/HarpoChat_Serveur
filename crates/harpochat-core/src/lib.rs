@@ -17,6 +17,7 @@ pub mod domain;
 pub mod envelope;
 mod error;
 pub mod hash;
+pub mod invite;
 pub mod keys;
 pub mod mailbox;
 pub mod signed;
