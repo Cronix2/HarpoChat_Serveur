@@ -11,6 +11,7 @@
 #![deny(missing_docs)]
 
 pub mod cbor;
+pub mod descriptor;
 pub mod domain;
 pub mod envelope;
 mod error;
