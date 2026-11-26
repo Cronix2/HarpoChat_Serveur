@@ -39,7 +39,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## État
 
-Phase **P1 en cours** : noyau `harpochat-core` v0.1.
+Phase **P1 terminée, en attente de revue** : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
 
 ## Licence
 
