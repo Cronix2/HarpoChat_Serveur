@@ -12,6 +12,7 @@
 
 pub mod cbor;
 pub mod descriptor;
+pub mod directory;
 pub mod domain;
 pub mod envelope;
 mod error;
