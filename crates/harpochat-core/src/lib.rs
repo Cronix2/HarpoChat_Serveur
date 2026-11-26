@@ -15,6 +15,7 @@ pub mod domain;
 mod error;
 pub mod hash;
 pub mod keys;
+pub mod mailbox;
 pub mod signed;
 
 pub use error::{CoreError, Result};
