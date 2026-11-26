@@ -69,6 +69,8 @@ pub enum FrameKind {
     JoinResponse = 0x06,
     /// Descriptors and revocations.
     Gossip = 0x07,
+    /// Gateway → phone: `surb_id[16] || final Sphinx payload` (E11).
+    Deliver = 0x08,
 }
 
 impl FrameKind {
@@ -82,6 +84,7 @@ impl FrameKind {
             0x05 => FrameKind::JoinRequest,
             0x06 => FrameKind::JoinResponse,
             0x07 => FrameKind::Gossip,
+            0x08 => FrameKind::Deliver,
             _ => return None,
         })
     }
@@ -201,7 +204,7 @@ mod tests {
     #[test]
     fn frame_rejects_unknown_kind() {
         let mut bytes = LinkFrame::padding(SizeClass::Small);
-        bytes[0] = 0x08;
+        bytes[0] = 0x09;
         assert_eq!(LinkFrame::decode(&bytes), Err(CoreError::Malformed));
     }
 
@@ -238,6 +241,7 @@ mod tests {
             (FrameKind::JoinRequest, 0x05),
             (FrameKind::JoinResponse, 0x06),
             (FrameKind::Gossip, 0x07),
+            (FrameKind::Deliver, 0x08),
         ];
         for (k, code) in all {
             assert_eq!(k as u8, code);

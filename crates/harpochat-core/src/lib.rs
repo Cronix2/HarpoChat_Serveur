@@ -22,6 +22,7 @@ pub mod invite;
 pub mod keys;
 pub mod link;
 pub mod mailbox;
+pub mod noise;
 pub mod signed;
 pub mod sphinx;
 

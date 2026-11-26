@@ -17,6 +17,9 @@ pub const PUT: &str = "harpochat/v1/put";
 /// Signature authorising FETCH / ACK / SUBSCRIBE on a mailbox.
 pub const READ: &str = "harpochat/v1/read";
 
+/// Signature binding a Noise static key to a node identity (design E4).
+pub const NOISE_STATIC: &str = "harpochat/v1/noise-static";
+
 /// HKDF info label for per-epoch mailbox keys.
 pub const MBX_KEYS: &str = "harpo-mbx-keys";
 /// Hash label for mailbox identifiers.
