@@ -12,6 +12,7 @@
 
 pub mod cbor;
 pub mod domain;
+pub mod envelope;
 mod error;
 pub mod hash;
 pub mod keys;
