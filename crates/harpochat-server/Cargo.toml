@@ -38,3 +38,6 @@ futures-util = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"

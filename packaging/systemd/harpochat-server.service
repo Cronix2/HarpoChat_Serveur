@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# HarpoChat mesh node — hardened systemd unit (spec §12.3).
+# Install: see docs/operators/services.md
+#   sudo useradd --system --home /var/lib/harpochat --shell /usr/sbin/nologin harpochat
+#   sudo install -m 0755 harpochat-server-linux-x86_64 /usr/local/bin/harpochat-server
+#   sudo install -m 0644 harpochat-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now harpochat-server
+
+[Unit]
+Description=HarpoChat mesh node (gateway, mix, RAM-only mailbox)
+Documentation=https://github.com/Cronix2/HarpoChat_Serveur/blob/main/docs/operators/install.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harpochat
+Group=harpochat
+ExecStart=/usr/local/bin/harpochat-server --dir /var/lib/harpochat run
+Restart=on-failure
+RestartSec=5
+Environment=HARPOCHAT_LOG=info
+# Only node.key and harpochat-server.toml live here.
+StateDirectory=harpochat
+StateDirectoryMode=0700
+UMask=0077
+
+# Port 443 without root, and no other privilege.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+
+# Mailboxes, SURBs and keys live in RAM: never in swap, never in a core dump.
+MemorySwapMax=0
+LimitCORE=0
+
+# Sandbox.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -52,6 +52,15 @@ pub enum Command {
         /// Vérifie la configuration et les clés, puis quitte.
         #[arg(long)]
         check: bool,
+        /// Lancé par le gestionnaire de services Windows (`service install`).
+        #[arg(long, hide = true)]
+        service: bool,
+    },
+    /// Installe ou retire le service Windows (sous Linux : unité systemd fournie).
+    Service {
+        /// Action.
+        #[command(subcommand)]
+        action: ServiceAction,
     },
     /// Crée un jeton de parrainage à usage unique pour un nouveau nœud.
     InviteNode {
@@ -72,6 +81,15 @@ pub enum Command {
         /// Identité du nœud (64 caractères hexadécimaux).
         node_id: String,
     },
+}
+
+/// `service` actions.
+#[derive(Debug, Subcommand)]
+pub enum ServiceAction {
+    /// Enregistre le service « HarpoChat » (démarrage automatique, compte LocalService).
+    Install,
+    /// Arrête et supprime le service.
+    Uninstall,
 }
 
 /// Data directory: `--dir`, else `$HARPOCHAT_HOME`, else `./harpochat-data`.
@@ -99,7 +117,8 @@ pub fn run_cli(cli: Cli) -> i32 {
     let dir = data_dir(&cli);
     match cli.cmd {
         Command::Init { root, endpoints } => init(&dir, root, endpoints),
-        Command::Run { check } => run(&dir, check),
+        Command::Run { check, service } => run(&dir, check, service),
+        Command::Service { action } => service(&dir, action),
         Command::InviteNode { hours } => invite_node(&dir, hours),
         Command::Join { token, endpoints } => join(&dir, &token, endpoints),
         Command::Revoke { node_id } => revoke(&dir, &node_id),
@@ -303,32 +322,58 @@ fn summary(node: &Node) -> String {
     )
 }
 
-fn run(dir: &Path, check: bool) -> i32 {
-    let node = match load(dir) {
-        Ok(n) => n,
-        Err(code) => return code,
-    };
+/// Load and check a node the way `run --check` does.
+fn prepare(dir: &Path) -> Result<Node, i32> {
+    let node = load(dir)?;
     let t = now();
     if let Err(e) = node
         .descriptor(t)
         .verify()
         .and_then(|d| descriptor::validate(&d, t))
     {
-        return fail(EXIT_RUNTIME, format!("descripteur invalide : {e}"));
+        return Err(fail(EXIT_RUNTIME, format!("descripteur invalide : {e}")));
     }
     if node.config.node.public_endpoints.is_empty() {
         eprintln!("attention : aucune adresse publique, le nœud ne sera pas joignable");
     }
-    if !crate::server::self_check(&node, t) {
-        return fail(
-            EXIT_RUNTIME,
-            "l'annuaire signé par ce nœud ne se vérifie pas",
+    if !node.config.node.root && node.chain().is_empty() {
+        eprintln!(
+            "attention : ce nœud n'est pas parrainé (node.chain vide) : ni les apps ni les \
+             autres nœuds ne l'accepteront ; utilisez `harpochat-server join <jeton>`"
         );
     }
+    if !crate::server::self_check(&node, t) {
+        return Err(fail(
+            EXIT_RUNTIME,
+            "l'annuaire signé par ce nœud ne se vérifie pas",
+        ));
+    }
+    Ok(node)
+}
+
+fn run(dir: &Path, check: bool, service: bool) -> i32 {
+    let node = match prepare(dir) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
     if check {
         println!("ok: {}", summary(&node));
         return EXIT_OK;
     }
+    if service {
+        #[cfg(windows)]
+        return crate::winservice::run(node);
+        #[cfg(not(windows))]
+        return fail(EXIT_USAGE, "--service n'existe que sous Windows");
+    }
+    serve_until(node, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+}
+
+/// Serve `node` until `shutdown` resolves; returns the exit code. All state
+/// lives in RAM and is dropped on return.
+pub fn serve_until(node: Node, shutdown: impl std::future::Future<Output = ()>) -> i32 {
     init_logging();
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -345,9 +390,6 @@ fn run(dir: &Path, check: bool) -> i32 {
             Err(e) => return fail(EXIT_RUNTIME, format!("écoute sur {addr} impossible : {e}")),
         };
         tracing::info!("harpochat-server démarré ({summary}), écoute sur {addr}");
-        let shutdown = async {
-            let _ = tokio::signal::ctrl_c().await;
-        };
         let r = crate::server::serve(node, listener, crate::router::system_clock(), shutdown).await;
         tracing::info!("arrêt : état en mémoire effacé");
         match r {
@@ -355,6 +397,48 @@ fn run(dir: &Path, check: bool) -> i32 {
             Err(e) => fail(EXIT_RUNTIME, e),
         }
     })
+}
+
+#[cfg(windows)]
+fn service(dir: &Path, action: ServiceAction) -> i32 {
+    match action {
+        ServiceAction::Install => {
+            if let Err(code) = prepare(dir) {
+                return code;
+            }
+            match crate::winservice::install(dir) {
+                Ok(()) => {
+                    println!(
+                        "service « {} » installé (démarrage automatique), données : {}",
+                        crate::winservice::SERVICE_NAME,
+                        crate::winservice::describe(dir).display()
+                    );
+                    println!(
+                        "→ démarrez-le : sc.exe start {}",
+                        crate::winservice::SERVICE_NAME
+                    );
+                    EXIT_OK
+                }
+                Err(e) => fail(EXIT_RUNTIME, e),
+            }
+        }
+        ServiceAction::Uninstall => match crate::winservice::uninstall() {
+            Ok(()) => {
+                println!("service supprimé");
+                EXIT_OK
+            }
+            Err(e) => fail(EXIT_RUNTIME, e),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+fn service(_dir: &Path, _action: ServiceAction) -> i32 {
+    fail(
+        EXIT_USAGE,
+        "service Windows uniquement ; sous Linux, utilisez l'unité systemd fournie \
+         (packaging/systemd/harpochat-server.service)",
+    )
 }
 
 fn init_logging() {
