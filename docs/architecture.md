@@ -44,13 +44,30 @@ crates/harpochat-core   noyau partagé serveur + Android, pur (aucun I/O, aucun 
   descriptor, directory descripteurs de nœuds, parrainage, révocation, annuaire signé
   invite, bootstrap     jetons hcn1- d'admission, bloc d'amorçage de l'app
   link, sphinx          trames de taille fixe, routage Sphinx et SURB
+  path                  choix des routes (client et leurres des nœuds), placement des boîtes
   test-vectors/v1.json  vecteurs figés, rejoués par les CI serveur et Android
 ```
 
 ```text
 crates/harpochat-core-ffi  bindings Kotlin (uniffi) du noyau, pour l'app Android
-crates/harpochat-server  binaire du nœud : config TOML, node.key, init / run (réseau en P4)
+crates/harpochat-server  binaire du nœud
+  config, keystore, node, cli   harpochat-server.toml, node.key, init / run
+  net, server                   TLS + WebSocket + Noise, liens téléphone et nœud
+  peers                         liens sortants vers les autres nœuds (pairs statiques, gossip en P7)
+  router                        couche Sphinx : anti-rejeu, délais, transmission, remise
+  service, store                boîtes aux lettres en RAM, abonnements SURB (PUSH / NOTIFY)
+  cover                         façonnage des liens, loops et drops du nœud, mesure des pertes
 ```
+
+### Trafic de couverture (P6)
+
+Chaque lien sortant émet ses trames aux instants d'un processus de Poisson. À chaque instant, la
+trame réelle suivante part, ou une trame de padding s'il n'y en a pas. Ces instants sont tirés
+**avant** de regarder la file : le test `shaped_instants_do_not_depend_on_traffic` vérifie qu'avec
+la même graine, un lien inactif et un lien chargé à 50 % émettent exactement aux mêmes instants. Seul
+le contenu chiffré diffère, et il est invisible. Les nœuds émettent aussi leurs propres loops et
+drops, mêlés au trafic réel. Les loops qui ne reviennent pas désignent localement les voisins qui
+perdent des paquets.
 
 ## 5. Choix cryptographiques
 
@@ -72,11 +89,11 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 
 | Phase | Contenu | État |
 |---|---|---|
-| P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé, en revue** |
-| P2 | Bindings Android (uniffi) | **terminé, en revue** |
-| P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
-| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé, en revue** |
-| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé, en revue** |
-| P6 | Trafic de couverture, temps réel (M3, M3b) | à faire |
+| P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé** |
+| P2 | Bindings Android (uniffi) | **terminé** |
+| P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé** |
+| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé** |
+| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé** |
+| P6 | Trafic de couverture, temps réel (M3, M3b) | **terminé, en revue** |
 | P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | à faire |
 | P8 | Fuzzing, audit des logs, builds reproductibles (M5) | à faire |

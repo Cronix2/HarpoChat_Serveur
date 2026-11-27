@@ -64,11 +64,14 @@ val t = session.transport
 
 fun send(kind: FfiFrameKind, body: ByteArray) =
     ws.send(t.encrypt(encodeFrame(kind, body, FfiSizeClass.SMALL)).toByteString())
-fun receive(bytes: ByteArray): FfiFrame = decodeFrame(t.decrypt(bytes))
+fun receive(bytes: ByteArray): FfiFrame? =
+    decodeFrame(t.decrypt(bytes)).takeIf { it.kind != FfiFrameKind.PADDING }   // padding : ignorer
 
-// 3. Boîte de réception de cette connexion (jeton neuf à chaque connexion).
+// 3. Boîte de réception de cette connexion (jeton neuf à chaque connexion),
+//    puis débit descendant voulu (P6) : 1 trame/s au premier plan, 0,05 à 0,1 en arrière-plan.
 val inbox = randomBytes(32u)
 send(FfiFrameKind.REGISTER_INBOX, inbox)
+send(FfiFrameKind.COVER_RATE, coverRateBody(1.0))
 
 // 4. Annuaire : DIRECTORY_REQ → DIRECTORY, vérifié contre les racines du bloc d'amorçage.
 val nodes = verifyDirectory(directoryFrame.body, roots, nowSecs)   // List<FfiNode>
@@ -92,9 +95,11 @@ when (reply) {
 }
 ```
 
-En M1, la route n'a qu'un saut (`listOf(hop)`). Dès P5, ce sera
-`gateway → mix → mailbox` pour l'aller et `mix → gateway` pour les SURB, avec la même API : seules
-les listes changent.
+Ce parcours n'utilise qu'un nœud (`listOf(hop)`), comme le test de référence. Sur un vrai mesh,
+les listes viennent de `forwardRoute` / `replyRoute` (voir `core-integration.md` §7). Le temps réel
+(`buildSubscribe`, trames `Push` / `Notify`) et la couverture montante (`buildDrop`,
+`phoneLoopRoute` + `buildLoopPacket`) sont décrits au §8. Le test `phone_is_pushed_through_ffi_only`
+exécute SUBSCRIBE → PUT → PUSH avec la seule API FFI.
 
 ## 4. Erreurs
 

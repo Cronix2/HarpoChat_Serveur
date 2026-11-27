@@ -103,7 +103,33 @@ d'IP, d'identifiant de boîte aux lettres, de taille ni d'horodatage de paquet (
 - Les certificats TLS auto-signés sont acceptés : l'authentification réelle d'un nœud passe par sa
   clé (Noise), pas par le certificat.
 
-## 5. Protéger la clé
+## 5. Trafic de couverture et bande passante
+
+Un nœud émet en permanence, même sans utilisateur : c'est ce qui empêche de distinguer un lien
+inactif d'un lien actif (spec §5, §6.3). La section `[cover]` règle ce coût :
+
+```toml
+[cover]
+node_link_rate = 10.0       # trames/s sur chaque lien vers un autre nœud (réelles ou padding)
+phone_link_rate = 1.0       # trames/s vers un téléphone, s'il ne demande rien
+phone_link_rate_min = 0.05  # bornes des débits qu'un téléphone peut demander
+phone_link_rate_max = 10.0
+loop_rate = 0.2             # loops émis par le nœud, par seconde (mesure des pertes)
+drop_rate = 0.2             # drops émis par le nœud, par seconde
+mean_delay_ms = 100         # délai moyen de mix de ces leurres
+```
+
+- **Coût :** une trame fait 2 Ko. `node_link_rate = 10` représente environ 20 Ko/s, soit
+  1,7 Go/jour, **par pair et par sens**. Un mesh de 5 nœuds coûte donc environ 7 Go/jour en
+  émission par nœud. Baissez ce débit sur une petite connexion. Gardez-le **au-dessus du trafic réel** :
+  au-delà, les trames réelles s'accumulent puis partent en rafale, et le lien trahit sa charge.
+- **Pertes :** chaque nœud mesure, grâce à ses loops, les voisins qui perdent ses paquets. Un voisin
+  qui en perd plus de 75 % devient « suspect » et n'est plus utilisé pour les drops du nœud. Rien
+  n'est publié ni journalisé par paquet.
+- `0` désactive un mécanisme. **Réservé au développement :** sans couverture, un observateur du
+  réseau voit quand un utilisateur reçoit du courrier.
+
+## 6. Protéger la clé
 
 `node.key` est créé avec les droits `0600` sous Linux. Sous Windows, gardez le répertoire de données
 dans votre profil utilisateur. Le durcissement des ACL est prévu en phase P8. Si vous perdez
