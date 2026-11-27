@@ -2,6 +2,7 @@
 //! Milestone M1: two clients exchange a blob through one node; a restart
 //! wipes everything.
 
+#[allow(dead_code)] // helpers shared with m2_mesh
 mod common;
 
 use std::net::SocketAddr;
