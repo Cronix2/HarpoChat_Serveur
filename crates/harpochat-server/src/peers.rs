@@ -221,7 +221,7 @@ async fn dialler(
             }
         };
         let Ok((mut reader, mut writer, _)) =
-            net::connect(addr, &keys.noise, Some(&keys.identity), Some(id)).await
+            net::connect_named(addr, &endpoint, &keys.noise, Some(&keys.identity), Some(id)).await
         else {
             if wait_or_closed(&mut rx, &mut backoff).await {
                 return;

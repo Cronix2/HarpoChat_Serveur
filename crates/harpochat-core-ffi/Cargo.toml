@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [lib]
-name = "harpochat_core_ffi"
+name = "corekit"
 crate-type = ["cdylib", "staticlib", "lib"]
 
 [[bin]]
