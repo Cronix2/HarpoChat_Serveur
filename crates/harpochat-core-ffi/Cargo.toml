@@ -1,0 +1,36 @@
+[package]
+name = "harpochat-core-ffi"
+description = "Kotlin/Android bindings (uniffi) for harpochat-core. No I/O: the app moves the bytes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "harpochat_core_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+# Kotlin generator: cargo run -p harpochat-core-ffi --features cli --bin uniffi-bindgen -- generate …
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
+[dependencies]
+harpochat-core = { path = "../harpochat-core", version = "0.1.0" }
+uniffi = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+harpochat-server = { path = "../harpochat-server", version = "0.1.0" }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+tokio-rustls = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }

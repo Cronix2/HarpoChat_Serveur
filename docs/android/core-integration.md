@@ -11,8 +11,8 @@
    pas investir dessus.
 2. **Tous les formats du mesh viennent d'un seul crate Rust, `harpochat-core`.** Ne réimplémentez ni
    CBOR, ni Sphinx, ni la dérivation des boîtes, ni les jetons en Kotlin : appelez le noyau.
-3. **Les bindings Kotlin (uniffi) arrivent en phase P2** (`core-v0.2.0`). D'ici là, l'API Rust
-   ci-dessous est la référence : les noms et la sémantique resteront ceux-là.
+3. **Les bindings Kotlin (uniffi) sont livrés en phase P2** : voir [`gradle-integration.md`](gradle-integration.md).
+   Les noms Kotlin suivent ceux de l'API Rust ci-dessous (`build_put` → `buildPut`, etc.).
 4. Le noyau est **pur** : aucun réseau, aucun fichier, aucune horloge. L'heure est toujours passée en
    paramètre (`now_unix_secs`). Le réseau (WSS + Noise) reste dans l'app.
 
@@ -132,6 +132,6 @@ Les chemins multi-nœuds arrivent en P5, sans changement de format.
 
 | Phase | Pour vous |
 |---|---|
-| P2 — `core-v0.2.0` | Bindings uniffi + `.so` pour `arm64-v8a`, `armeabi-v7a`, `x86_64`, guide Gradle. |
+| P2 — `core-v0.2.0` | **Fait** : voir [`gradle-integration.md`](gradle-integration.md). |
 | P4 | **Fait** : voir §6. Premier serveur joignable (`harpochat-server run`). |
 | P5–P6 | Mesh à 5 nœuds, SUBSCRIBE / PUSH en temps réel. |

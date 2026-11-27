@@ -23,6 +23,7 @@ l'administrateur du nœud.
 
 ```text
 crates/harpochat-core     noyau partagé serveur + Android : formats, Sphinx, boîtes, jetons (pur, sans I/O)
+crates/harpochat-core-ffi bindings Kotlin (uniffi) du noyau pour l'app Android
 crates/harpochat-server   binaire du nœud : TLS + WebSocket + Noise, routeur Sphinx, boîtes aux lettres en RAM
 ```
 
@@ -40,7 +41,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## État
 
-Phases **P1** (noyau), **P3** (binaire, releases signées) et **P4** (nœud joignable, M1) terminées, en revue : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
+Phases **P1** (noyau), **P3** (binaire, releases signées) **P4** (nœud joignable, M1) et **P2** (bindings Android) terminées, en revue : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
 
 ## Licence
 

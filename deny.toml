@@ -16,6 +16,10 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "CC0-1.0",
+  # Apache-2.0 plus the permissive LLVM exception (target-lexicon, via uniffi tooling).
+  "Apache-2.0 WITH LLVM-exception",
+  # uniffi (Kotlin bindings): file-level weak copyleft; we use it unmodified.
+  "MPL-2.0",
 ]
 
 [bans]
