@@ -1,7 +1,7 @@
 # HarpoChat Server — architecture
 
 > **Pour :** toute personne qui découvre le projet, y compris le jury. Mise à jour à chaque phase.
-> **État :** phase P1 (noyau `harpochat-core` v0.1) terminée, en revue.
+> **État :** phases P1 (noyau) et P3 (binaire `harpochat-server`, releases signées) terminées, en revue.
 
 ## 1. Le problème
 
@@ -47,7 +47,9 @@ crates/harpochat-core   noyau partagé serveur + Android, pur (aucun I/O, aucun 
   test-vectors/v1.json  vecteurs figés, rejoués par les CI serveur et Android
 ```
 
-Le binaire `harpochat-server` (rôles gateway / mix / mailbox) arrive en P3.
+```text
+crates/harpochat-server  binaire du nœud : config TOML, node.key, init / run (réseau en P4)
+```
 
 ## 5. Choix cryptographiques
 
@@ -71,7 +73,7 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 |---|---|---|
 | P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé, en revue** |
 | P2 | Bindings Android (uniffi) | à faire |
-| P3 | Binaire, CLI, configuration, releases signées (M0) | à faire |
+| P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
 | P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | à faire |
 | P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | à faire |
 | P6 | Trafic de couverture, temps réel (M3, M3b) | à faire |
