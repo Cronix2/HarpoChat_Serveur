@@ -1,22 +1,72 @@
 name: Release
 
-# Builds the three standalone binaries of spec §12.1 on a `v*` tag, writes
-# SHA256SUMS and signs it keylessly with Sigstore cosign (GitHub OIDC):
-# anyone can check that a binary was built by this repository's workflow.
+# Publishes compiled releases, with no tag to create by hand:
+#
+# - every merge into main  → pre-release "latest" (replaced each time):
+#   the three server binaries + the Android library, built from that commit;
+# - "Run workflow" button   → a numbered release vX.Y.Z (the version typed,
+#   or the one in Cargo.toml); the workflow creates the tag itself;
+# - a pushed tag v*         → that numbered release (optional).
+#
+# Every release carries SHA256SUMS, signed keylessly with Sigstore cosign
+# (GitHub OIDC): anyone can check the files were built by this workflow, and
+# rebuild the Linux binaries byte for byte (scripts/verify-release.sh).
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version à publier, ex. 0.2.0 (vide : celle de Cargo.toml)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: build ${{ matrix.artifact }}
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.p.outputs.tag }}
+      prerelease: ${{ steps.p.outputs.prerelease }}
+      title: ${{ steps.p.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          short="${GITHUB_SHA:0:7}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            v="${INPUT_VERSION#v}"
+            [ -n "$v" ] || v="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+            echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' \
+              || { echo "version invalide : $v"; exit 1; }
+            tag="v$v"; pre=false; title="harpochat $tag"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"; pre=false; title="harpochat $tag"
+          else
+            tag="latest"; pre=true; title="harpochat — dernière version de main ($short)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "→ $title"
+
+  server:
+    name: server ${{ matrix.artifact }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -71,9 +121,39 @@ jobs:
           path: dist/${{ matrix.artifact }}
           if-no-files-found: error
 
+  android:
+    name: android library
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust Android targets
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build .so (NDK preinstalled on the runner)
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT}"
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 26 \
+            -o dist/jniLibs build --release --locked -p harpochat-core-ffi
+      - name: Kotlin bindings and archive
+        # Generated from an unstripped host build (the release .so are stripped).
+        run: |
+          cargo build --locked -p harpochat-core-ffi --lib
+          cargo run --locked -p harpochat-core-ffi --features cli --bin uniffi-bindgen -- \
+            generate --library target/debug/libharpochat_core_ffi.so \
+            --language kotlin --no-format --out-dir dist/kotlin
+          mkdir -p dist/test-vectors && cp crates/harpochat-core/test-vectors/v1.json dist/test-vectors/
+          (cd dist && zip -qr ../harpochat-core-android.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harpochat-core-android.zip
+          path: harpochat-core-android.zip
+          if-no-files-found: error
+
   publish:
     name: checksums, signature, release
-    needs: build
+    needs: [plan, server, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,7 +165,7 @@ jobs:
           merge-multiple: true
       - name: SHA256SUMS
         working-directory: dist
-        run: sha256sum harpochat-server-* > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum harpochat-* > SHA256SUMS && cat SHA256SUMS
       - uses: sigstore/cosign-installer@v3
       - name: Sign SHA256SUMS (keyless)
         working-directory: dist
@@ -93,8 +173,29 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          TITLE: ${{ needs.plan.outputs.title }}
+          PRE: ${{ needs.plan.outputs.prerelease }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "harpochat-server ${GITHUB_REF_NAME}" \
-            --notes "Binaires autonomes. Vérification : voir docs/operators/install.md."
+          cat > notes.md <<EOF
+          Compilé depuis le commit ${GITHUB_SHA} par ce workflow.
+
+          | Fichier | Pour |
+          |---|---|
+          | \`harpochat-server-windows-x86_64.exe\` | nœud, Windows 64 bits |
+          | \`harpochat-server-linux-x86_64\` | nœud, Linux 64 bits (PC, VPS) |
+          | \`harpochat-server-linux-aarch64\` | nœud, Linux ARM 64 bits (Raspberry Pi 4/5) |
+          | \`harpochat-core-android.zip\` | app Android : .so (3 ABI), bindings Kotlin, vecteurs de test |
+
+          Vérification : \`SHA256SUMS\` est signé par Sigstore, voir docs/operators/install.md,
+          ou \`scripts/verify-release.sh ${TAG}\` (signature + recompilation à l'identique).
+          EOF
+          if [ "$PRE" = "true" ]; then
+            # Rolling pre-release: replace the previous one.
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --title "$TITLE" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TITLE" --notes-file notes.md --generate-notes
+          fi

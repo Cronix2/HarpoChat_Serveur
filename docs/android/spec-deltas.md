@@ -1,9 +1,10 @@
 # Écarts proposés à `SERVER_SPEC.md` v0.2
 
 > **Pour :** le porteur du projet, qui tient la spec, et l'instance Android.
-> **De :** l'équipe serveur, phase P1 (2026-11-26). La spec n'a **pas** été modifiée : chaque ligne
-> ci-dessous est une proposition de modification, avec sa raison. Tout est déjà implémenté ainsi
-> dans `harpochat-core` v0.1.
+> **De :** l'équipe serveur (2026-11-26 → 2026-11-27). La spec n'a **pas** été modifiée : chaque
+> ligne ci-dessous est un écart, avec sa raison, et tout est implémenté ainsi.
+>
+> **Statut :** E14 à E22 **validés** par le porteur du projet le 2026-11-27.
 
 | # | Section de la spec | Proposition | Raison |
 |---|---|---|---|

@@ -6,9 +6,12 @@
 
 ## 1. Ce qui est livré
 
-Le workflow GitHub **Android core** (`.github/workflows/android.yml`) produit
-`harpochat-core-android.zip` : en artefact sur chaque PR, et en asset de release sur chaque tag
-`core-v*`. Contenu de l'archive :
+`harpochat-core-android.zip` est publié sur la page
+[Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases), avec les binaires du serveur :
+dans la pré-release **`latest`**, reconstruite à chaque modification de `main`, et dans chaque
+version numérotée **`vX.Y.Z`**. Prenez une version numérotée pour une build de l'app, `latest` pour
+suivre le développement. Sur une PR, le workflow **Android core** fournit aussi l'archive en
+artefact. Contenu de l'archive :
 
 ```text
 jniLibs/arm64-v8a/libharpochat_core_ffi.so

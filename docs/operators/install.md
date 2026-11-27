@@ -17,7 +17,10 @@
 ## 1. Télécharger et vérifier
 
 Sur la page [Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases), récupérez le binaire
-de votre machine, ainsi que `SHA256SUMS` et `SHA256SUMS.cosign.bundle`.
+de votre machine, ainsi que `SHA256SUMS` et `SHA256SUMS.cosign.bundle`. Il y a deux sortes de releases :
+
+- **`latest`** (pré-release) : reconstruite automatiquement à chaque modification de `main` ;
+- **`vX.Y.Z`** : les versions numérotées, publiées par le porteur du projet.
 
 | Machine | Fichier |
 |---|---|
@@ -31,7 +34,7 @@ Vérifiez que `SHA256SUMS` a bien été produit par le workflow de ce dépôt (s
 ```bash
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity-regexp '^https://github.com/Cronix2/HarpoChat_Serveur/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github.com/Cronix2/HarpoChat_Serveur/\.github/workflows/release\.yml@refs/(heads/main|tags/.+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS      # Windows : Get-FileHash <fichier> -Algorithm SHA256

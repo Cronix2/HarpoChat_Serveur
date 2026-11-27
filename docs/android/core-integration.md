@@ -1,7 +1,7 @@
 # `harpochat-core` v0.1 — guide d'intégration côté Android
 
 > **Pour :** l'équipe (ou l'instance Claude Code) qui développe l'app Android HarpoChat.
-> **De :** l'équipe serveur. **Date :** 2026-11-26. **Version du noyau :** `0.1.0` (tag `core-v0.1.0` après fusion).
+> **De :** l'équipe serveur. **Date :** 2026-11-26. **Version du noyau :** celle de la release (page Releases : `latest`, ou `vX.Y.Z`).
 > **Contrat de référence :** `docs/SERVER_SPEC.md` v0.2. Les écarts proposés sont dans [`spec-deltas.md`](spec-deltas.md).
 
 ## 1. Ce qui change pour vous, en bref
@@ -226,7 +226,7 @@ la PUT et le PUSH. Avec λ = 1 /s, comptez environ 1 s de plus.
 
 | Phase | Pour vous |
 |---|---|
-| P2 — `core-v0.2.0` | **Fait** : voir [`gradle-integration.md`](gradle-integration.md). |
+| P2 | **Fait** : voir [`gradle-integration.md`](gradle-integration.md). |
 | P4 | **Fait** : voir §6. Premier serveur joignable (`harpochat-server run`). |
 | P5 | **Fait** : voir §7. |
 | P6 | **Fait** : voir §8. Trames `Padding` à ignorer, `CoverRate`, SUBSCRIBE / PUSH, loops. |
