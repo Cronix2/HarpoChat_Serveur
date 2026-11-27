@@ -37,9 +37,13 @@ jobs:
             -o dist/jniLibs build --release --locked -p harpochat-core-ffi
           ls -lR dist/jniLibs
       - name: Kotlin bindings
+        # Generated from an unstripped host build: the release .so are stripped
+        # (strip = true), which removes uniffi's metadata but keeps the exported
+        # symbols JNA needs.
         run: |
+          cargo build --locked -p harpochat-core-ffi --lib
           cargo run --locked -p harpochat-core-ffi --features cli --bin uniffi-bindgen -- \
-            generate --library target/aarch64-linux-android/release/libharpochat_core_ffi.so \
+            generate --library target/debug/libharpochat_core_ffi.so \
             --language kotlin --no-format --out-dir dist/kotlin
           mkdir -p dist/test-vectors && cp crates/harpochat-core/test-vectors/v1.json dist/test-vectors/
           (cd dist && zip -r ../harpochat-core-android.zip .)
