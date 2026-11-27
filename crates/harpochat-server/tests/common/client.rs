@@ -12,6 +12,21 @@ use harpochat_core::mailbox::{sign_put, sign_read, MailboxKeys, ReadOp};
 use harpochat_core::sphinx::{self, Hop, LOCAL_DELIVERY};
 use harpochat_server::net::{self, LinkReader, LinkWriter, NetError};
 
+/// Next frame that is not link padding; `None` on timeout.
+pub async fn recv_skipping_padding(
+    reader: &mut LinkReader,
+    within: Duration,
+) -> Option<Result<(SizeClass, LinkFrame), NetError>> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match tokio::time::timeout_at(deadline, reader.recv()).await {
+            Err(_) => return None,
+            Ok(Ok((_, f))) if f.kind == FrameKind::Padding => continue,
+            Ok(r) => return Some(r),
+        }
+    }
+}
+
 pub struct Client {
     pub reader: LinkReader,
     pub writer: LinkWriter,
@@ -39,6 +54,11 @@ impl Client {
             inbox,
             node,
         })
+    }
+
+    /// Next non-padding frame; `None` on timeout or closed link.
+    pub async fn recv_real(&mut self, within: Duration) -> Option<(SizeClass, LinkFrame)> {
+        recv_skipping_padding(&mut self.reader, within).await?.ok()
     }
 
     pub async fn send_message(&mut self, msg: &Message) -> Result<(), NetError> {
@@ -90,10 +110,7 @@ impl Client {
         })
         .await
         .ok()?;
-        let (_, frame) = tokio::time::timeout(Duration::from_secs(5), self.reader.recv())
-            .await
-            .ok()?
-            .ok()?;
+        let (_, frame) = self.recv_real(Duration::from_secs(5)).await?;
         assert_eq!(frame.kind, FrameKind::Deliver);
         assert_eq!(frame.body[..16], surb_id);
         let plain = sphinx::recover_reply(&rec, &frame.body[16..]).ok()?;

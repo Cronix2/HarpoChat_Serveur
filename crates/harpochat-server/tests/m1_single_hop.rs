@@ -2,7 +2,7 @@
 //! Milestone M1: two clients exchange a blob through one node; a restart
 //! wipes everything.
 
-#[allow(dead_code)] // helpers shared with m2_mesh
+#[allow(dead_code)] // helpers shared with the other milestone tests
 mod common;
 
 use std::net::SocketAddr;
@@ -136,9 +136,9 @@ async fn wrong_size_frame_closes_link() {
     let node = start(NodeKeys::generate()).await;
     let mut c = Client::connect(node.addr, node.hop).await.unwrap();
     c.writer.send_raw(vec![0; 100]).await.unwrap();
-    let r = tokio::time::timeout(Duration::from_secs(5), c.reader.recv())
+    let r = common::client::recv_skipping_padding(&mut c.reader, Duration::from_secs(5))
         .await
-        .unwrap();
+        .expect("closed in time");
     assert!(r.is_err(), "link must be closed");
     // The node still serves others.
     assert!(Client::connect(node.addr, node.hop).await.is_ok());
@@ -159,10 +159,7 @@ async fn directory_request_returns_signed_self() {
         )
         .await
         .unwrap();
-    let (class, frame) = tokio::time::timeout(Duration::from_secs(5), c.reader.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let (class, frame) = c.recv_real(Duration::from_secs(5)).await.unwrap();
     assert_eq!(frame.kind, FrameKind::Directory);
     assert_eq!(class, SizeClass::Small);
     let dir: Signed<Directory> = harpochat_core::cbor::from_slice(&frame.body, 1 << 20).unwrap();

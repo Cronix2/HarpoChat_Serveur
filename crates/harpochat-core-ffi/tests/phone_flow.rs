@@ -76,11 +76,18 @@ impl Phone {
         self.ws.send(Ws::Binary(ct.into())).await.unwrap();
     }
 
+    /// Next frame that is not link padding (the app ignores padding).
     async fn recv(&mut self) -> FfiFrame {
-        let m = tokio::time::timeout(Duration::from_secs(5), next_binary(&mut self.ws))
-            .await
-            .expect("frame in time");
-        decode_frame(self.transport.decrypt(m).unwrap()).unwrap()
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let m = tokio::time::timeout_at(deadline, next_binary(&mut self.ws))
+                .await
+                .expect("frame in time");
+            let f = decode_frame(self.transport.decrypt(m).unwrap()).unwrap();
+            if f.kind != FfiFrameKind::Padding {
+                return f;
+            }
+        }
     }
 }
 
@@ -180,6 +187,103 @@ async fn phone_exchanges_a_blob_through_ffi_only() {
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+async fn start_node() -> (std::net::SocketAddr, Vec<u8>) {
+    let mut config = Config::default();
+    config.node.root = true;
+    config.node.public_endpoints = vec!["wss://127.0.0.1".into()];
+    let node = Node::new(config, NodeKeys::generate(), now()).unwrap();
+    let node_id = node.keys.identity.public().to_vec();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(harpochat_server::server::serve(
+        node,
+        listener,
+        harpochat_server::router::system_clock(),
+        std::future::pending(),
+    ));
+    (addr, node_id)
+}
+
+#[tokio::test]
+async fn phone_is_pushed_through_ffi_only() {
+    let (addr, node_id) = start_node().await;
+    let mut bob = Phone::connect(addr, &node_id).await;
+    // App in the foreground: ask for a faster downlink (lower latency).
+    bob.send(FfiFrameKind::CoverRate, cover_rate_body(5.0).unwrap())
+        .await;
+    bob.send(FfiFrameKind::DirectoryReq, vec![]).await;
+    let dir = bob.recv().await;
+    let nodes = verify_directory(dir.body, vec![node_id.clone()], now()).unwrap();
+    let hop = FfiHop {
+        id_pub: nodes[0].id_pub.clone(),
+        sphinx_pub: nodes[0].sphinx_pub.clone(),
+    };
+    let pair_secret = random_bytes(32).unwrap();
+    let keys = FfiMailboxKeys::derive(pair_secret, epoch_of(now())).unwrap();
+
+    // SUBSCRIBE with as many SURBs as fit a Small packet.
+    let n = sizes(FfiSizeClass::Small).max_surbs_per_subscribe;
+    let surbs: Vec<(Vec<u8>, FfiSurb)> = (0..n)
+        .map(|_| {
+            let id = random_bytes(16).unwrap();
+            let s = create_surb(vec![hop.clone()], bob.inbox.clone(), id.clone(), vec![0]).unwrap();
+            (id, s)
+        })
+        .collect();
+    let sub = build_subscribe(
+        &keys,
+        surbs.iter().map(|(_, s)| s.surb.clone()).collect(),
+        now() + 3600,
+        now(),
+    )
+    .unwrap();
+    let pkt = build_forward(
+        sub,
+        vec![hop.clone()],
+        local_delivery(),
+        vec![0],
+        FfiSizeClass::Small,
+    )
+    .unwrap();
+    bob.send(FfiFrameKind::Sphinx, pkt).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Alice writes; Bob is pushed.
+    let mut alice = Phone::connect(addr, &node_id).await;
+    let put = build_put(&keys, b"pushed".to_vec()).unwrap();
+    let pkt = build_forward(
+        put,
+        vec![hop],
+        local_delivery(),
+        vec![0],
+        FfiSizeClass::Small,
+    )
+    .unwrap();
+    alice.send(FfiFrameKind::Sphinx, pkt).await;
+
+    let deliver = bob.recv().await;
+    assert_eq!(deliver.kind, FfiFrameKind::Deliver);
+    let (_, surb) = surbs
+        .iter()
+        .find(|(id, _)| id[..] == deliver.body[..16])
+        .expect("one of our SURBs");
+    let reply = recover_reply(surb.recovery.clone(), deliver.body[16..].to_vec()).unwrap();
+    match decode_message(reply).unwrap() {
+        FfiMessage::Push { blobs, .. } => assert_eq!(blobs[0].blob, b"pushed"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn cover_rate_body_rejects_nonsense() {
+    assert_eq!(
+        cover_rate_body(1.5).unwrap(),
+        1500u32.to_be_bytes().to_vec()
+    );
+    assert!(cover_rate_body(-1.0).is_err());
+    assert!(cover_rate_body(f64::NAN).is_err());
 }
 
 #[test]
