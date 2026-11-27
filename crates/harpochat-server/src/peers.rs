@@ -7,6 +7,10 @@
 //! the peer's own outbound link (an inbound link here). Sending never blocks:
 //! a full queue or a down peer drops the packet and counts it.
 //!
+//! Outbound links are shaped (`cover::Shaper`): frames leave at the instants
+//! of a Poisson process of rate `[cover] node_link_rate`, padding filling the
+//! slots that carry no packet (spec §5).
+//!
 //! Static peers (`[[peers]]`) until gossip and sponsorship arrive in P7.
 
 use std::collections::HashMap;
@@ -20,6 +24,7 @@ use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
 use harpochat_core::signed::Signed;
 use tokio::sync::mpsc;
 
+use crate::cover::{os_uniform, Rate, Shaper};
 use crate::keystore::NodeKeys;
 use crate::net;
 
@@ -27,6 +32,8 @@ use crate::net;
 pub const PEER_QUEUE: usize = 1024;
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// Backlog drained at once on an overloaded node link.
+const PEER_BURST: usize = 256;
 
 struct Peer {
     id: [u8; 32],
@@ -41,12 +48,14 @@ pub struct Peers {
 }
 
 impl Peers {
-    /// Start one dialler per peer. Packets the peers send back on our
-    /// outbound links are handed to `inbound`.
+    /// Start one dialler per peer, its link shaped at `link_rate` frames per
+    /// second (0 = unshaped). Packets the peers send back on our outbound
+    /// links are handed to `inbound`.
     pub fn start(
         keys: &NodeKeys,
         peers: Vec<([u8; 32], String)>,
         inbound: mpsc::Sender<Vec<u8>>,
+        link_rate: f64,
     ) -> Self {
         let descriptors = Arc::new(Mutex::new(HashMap::new()));
         let mut by_addr = HashMap::new();
@@ -64,6 +73,7 @@ impl Peers {
                 rx,
                 inbound.clone(),
                 descriptors.clone(),
+                Arc::new(Rate::new(link_rate)),
             )));
             by_addr.insert(node_address(&id), Peer { id, tx });
         }
@@ -132,8 +142,10 @@ async fn dialler(
     mut rx: mpsc::Receiver<Vec<u8>>,
     inbound: mpsc::Sender<Vec<u8>>,
     descriptors: Arc<Mutex<HashMap<[u8; 32], Signed<NodeDescriptor>>>>,
+    rate: Arc<Rate>,
 ) {
     let mut backoff = BACKOFF_MIN;
+    let mut shaper = Shaper::new(rate, PEER_BURST, os_uniform);
     loop {
         let addr = match tokio::net::lookup_host(endpoint.as_str())
             .await
@@ -168,7 +180,7 @@ async fn dialler(
             )
             .await;
         // Aborted when this iteration ends (link lost or dialler aborted).
-        let read_task = AbortOnDrop({
+        let mut read_task = AbortOnDrop({
             let (inbound, descriptors) = (inbound.clone(), descriptors.clone());
             tokio::spawn(async move {
                 while let Ok((_, frame)) = reader.recv().await {
@@ -182,20 +194,42 @@ async fn dialler(
                 }
             })
         });
-        // Pump our packets to the peer until the link breaks.
+        // Pump our packets (or padding) to the peer until the link breaks.
         loop {
             tokio::select! {
-                pkt = rx.recv() => {
-                    let Some(pkt) = pkt else { return };
-                    let class = if pkt.len() <= SizeClass::Small.max_body_len() { SizeClass::Small } else { SizeClass::Large };
-                    if writer.send(&LinkFrame { kind: FrameKind::Sphinx, body: pkt }, class).await.is_err() {
+                batch = shaper.next(&mut rx) => {
+                    let Some(batch) = batch else { return };
+                    if !send_batch(&mut writer, batch).await {
                         break;
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_secs(1)), if read_task.0.is_finished() => break,
+                _ = &mut read_task.0 => break,
             }
         }
     }
+}
+
+/// Send one slot's frames; `false` if the link broke.
+async fn send_batch(writer: &mut net::LinkWriter, batch: Vec<Option<Vec<u8>>>) -> bool {
+    for item in batch {
+        let frame = LinkFrame {
+            kind: if item.is_some() {
+                FrameKind::Sphinx
+            } else {
+                FrameKind::Padding
+            },
+            body: item.unwrap_or_default(),
+        };
+        let class = if frame.body.len() <= SizeClass::Small.max_body_len() {
+            SizeClass::Small
+        } else {
+            SizeClass::Large
+        };
+        if writer.send(&frame, class).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -245,7 +279,7 @@ mod tests {
     async fn addr_maps_to_peer_and_unknown_is_false() {
         let keys = NodeKeys::generate();
         let (tx, _rx) = mpsc::channel(8);
-        let peers = Peers::start(&keys, vec![([5; 32], "127.0.0.1:1".into())], tx);
+        let peers = Peers::start(&keys, vec![([5; 32], "127.0.0.1:1".into())], tx, 0.0);
         assert!(peers.is_peer(&[5; 32]));
         assert!(!peers.is_peer(&[6; 32]));
         assert!(peers.send(&node_address(&[5; 32]), vec![1]));
@@ -260,6 +294,7 @@ mod tests {
             &keys,
             vec![(keys.identity.public(), "127.0.0.1:1".into())],
             tx,
+            0.0,
         );
         assert!(peers.ids().is_empty());
     }
@@ -269,7 +304,7 @@ mod tests {
         let keys = NodeKeys::generate();
         let (tx, _rx) = mpsc::channel(8);
         // Port 1 refuses connections: nothing drains the queue for a while.
-        let peers = Peers::start(&keys, vec![([5; 32], "127.0.0.1:1".into())], tx);
+        let peers = Peers::start(&keys, vec![([5; 32], "127.0.0.1:1".into())], tx, 0.0);
         let addr = node_address(&[5; 32]);
         let accepted = (0..PEER_QUEUE + 10)
             .filter(|_| peers.send(&addr, vec![0]))

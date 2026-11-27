@@ -3,7 +3,10 @@
 //!
 //! A link whose peer proved the identity of a configured `[[peers]]` node is
 //! a **node link** (Sphinx, directory and padding only). Any other link is a
-//! **phone link** (inbox registration, Sphinx, directory).
+//! **phone link** (inbox registration, Sphinx, directory, cover rate).
+//!
+//! What a node sends to a phone is shaped (`cover::Shaper`) at the phone's
+//! chosen rate, bounded by `[cover] phone_link_rate_min/max`.
 //!
 //! No log line mentions a client address, an inbox token or a packet: only
 //! startup, shutdown and aggregated counters (spec §10).
@@ -13,12 +16,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use harpochat_core::directory::{Directory, DirectoryEntry, VERSION as DIR_VERSION};
-use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
+use harpochat_core::link::{parse_cover_rate, FrameKind, LinkFrame, SizeClass};
 use harpochat_core::signed::Signed;
 use harpochat_core::{cbor, directory, CoreError};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
+use crate::config::Cover;
+use crate::cover::{self, frame_or_padding, os_uniform, Rate, Shaper};
 use crate::net::{self, NetError, RateLimit};
 use crate::node::Node;
 use crate::peers::Peers;
@@ -34,6 +39,9 @@ const INBOUND_QUEUE: usize = 4096;
 /// Node links carry the whole mesh's traffic: a higher frame budget.
 const NODE_RATE: u32 = 2_000;
 const NODE_BURST: u32 = 8_000;
+/// Backlog drained at once on an overloaded phone link (e.g. a FETCH
+/// answered through many SURBs).
+const PHONE_BURST: usize = 16;
 
 fn class_for(frame: &LinkFrame) -> SizeClass {
     if frame.body.len() <= SizeClass::Small.max_body_len() {
@@ -91,7 +99,7 @@ impl Server {
         let peers = Arc::new(if peer_list.is_empty() {
             Peers::none()
         } else {
-            Peers::start(&node.keys, peer_list, tx)
+            Peers::start(&node.keys, peer_list, tx, node.config.cover.node_link_rate)
         });
         let router = Arc::new(Router::new(
             &node.keys.identity.public(),
@@ -136,10 +144,15 @@ impl Server {
                 loop {
                     tick.tick().await;
                     let now = router.now();
-                    router.with_service(|s| s.store_mut().sweep(now));
+                    router.with_service(|s| s.sweep(now));
                 }
             }));
         }
+        background.push(tokio::spawn(cover::node_cover(
+            self.node.clone(),
+            self.router.clone(),
+            self.peers.clone(),
+        )));
         let mut links = tokio::task::JoinSet::new();
         tokio::pin!(shutdown);
         loop {
@@ -179,14 +192,31 @@ async fn handle_link(
     let (mut reader, mut writer, peer) =
         net::accept(tcp, &tls, &node.keys.noise, &node.keys.identity).await?;
     let is_node = peer.node_id.is_some_and(|id| peers.is_peer(&id));
+    let cfg: &Cover = &node.config.cover;
+    // Node links are shaped by the peer's own dialler; only the phone
+    // downlink is shaped here.
+    let rate = Arc::new(Rate::new(if is_node { 0.0 } else { cfg.phone_link_rate }));
     let (tx, mut rx) = mpsc::channel::<LinkFrame>(LINK_QUEUE);
-    let writer_task = tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
-            if writer.send(&frame, class_for(&frame)).await.is_err() {
-                break;
+    let writer_task = {
+        let (rate, router) = (rate.clone(), router.clone());
+        tokio::spawn(async move {
+            let mut shaper = Shaper::new(rate, PHONE_BURST, os_uniform);
+            while let Some(batch) = shaper.next(&mut rx).await {
+                for item in batch {
+                    if item.is_none() {
+                        router
+                            .counters
+                            .padding_sent
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let frame = frame_or_padding(item);
+                    if writer.send(&frame, class_for(&frame)).await.is_err() {
+                        return;
+                    }
+                }
             }
-        }
-    });
+        })
+    };
 
     let mut limit = if is_node {
         RateLimit::new(NODE_RATE, NODE_BURST)
@@ -202,6 +232,10 @@ async fn handle_link(
         if !limit.allow(Instant::now()) {
             break Err(NetError::Protocol(CoreError::TooLarge));
         }
+        router
+            .counters
+            .frames_in
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match frame.kind {
             FrameKind::Sphinx => router.submit(frame.body),
             FrameKind::RegisterInbox if !is_node => {
@@ -212,6 +246,13 @@ async fn handle_link(
                     router.inboxes.unregister(&old);
                 }
                 router.inboxes.register(token, tx.clone());
+            }
+            FrameKind::CoverRate if !is_node => {
+                let Ok(mhz) = parse_cover_rate(&frame.body) else {
+                    break Err(NetError::Protocol(CoreError::Malformed));
+                };
+                let hz = f64::from(mhz) / 1000.0;
+                rate.set_hz(hz.clamp(cfg.phone_link_rate_min, cfg.phone_link_rate_max));
             }
             FrameKind::DirectoryReq => {
                 let dir = own_directory(&node, &peers, router.now());
@@ -227,8 +268,9 @@ async fn handle_link(
     if let Some(token) = inbox {
         router.inboxes.unregister(&token);
     }
+    // A shaped writer only notices a closed queue at its next slot: stop it.
     drop(tx);
-    let _ = writer_task.await;
+    writer_task.abort();
     result
 }
 

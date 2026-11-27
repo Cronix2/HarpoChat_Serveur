@@ -18,6 +18,7 @@ use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
 use harpochat_core::sphinx::{self, Processed, LOCAL_DELIVERY};
 use tokio::sync::mpsc;
 
+use crate::cover::LoopTracker;
 use crate::peers::Peers;
 use crate::service::MailboxService;
 use crate::store::SeenCache;
@@ -86,6 +87,20 @@ pub struct Counters {
     pub packets_dropped: AtomicU64,
     /// Frames handed to phones.
     pub delivered: AtomicU64,
+    /// Link frames received (all links, padding included).
+    pub frames_in: AtomicU64,
+    /// Padding frames sent to phones.
+    pub padding_sent: AtomicU64,
+    /// Loops emitted by this node.
+    pub loops_sent: AtomicU64,
+    /// Our loops that came back.
+    pub loops_returned: AtomicU64,
+    /// Our loops that did not come back in time.
+    pub loops_lost: AtomicU64,
+    /// Drops emitted by this node.
+    pub drops_sent: AtomicU64,
+    /// Subscription pushes (PUSH or NOTIFY) sent.
+    pub pushes: AtomicU64,
 }
 
 /// The routing core of a node.
@@ -99,6 +114,8 @@ pub struct Router {
     pub inboxes: Arc<Inboxes>,
     /// Counters.
     pub counters: Counters,
+    /// This node's loops in flight and neighbour loss scores.
+    pub loops: Mutex<LoopTracker>,
     clock: Clock,
 }
 
@@ -119,6 +136,7 @@ impl Router {
             peers,
             inboxes: Arc::new(Inboxes::default()),
             counters: Counters::default(),
+            loops: Mutex::new(LoopTracker::new(std::time::Instant::now())),
             clock,
         }
     }
@@ -171,6 +189,8 @@ impl Router {
             } => {
                 if destination == LOCAL_DELIVERY {
                     self.deliver_local(&payload, now);
+                } else if self.loops.lock().expect("loops").complete(&destination) {
+                    self.counters.loops_returned.fetch_add(1, Ordering::Relaxed);
                 } else {
                     let mut body = surb_id.to_vec();
                     body.extend_from_slice(&payload);
@@ -188,8 +208,9 @@ impl Router {
         }
     }
 
-    /// Send a packet to the node at `addr` (ourselves included).
-    fn forward(self: &Arc<Self>, addr: [u8; 32], packet: Vec<u8>) {
+    /// Send a packet to the node at Sphinx address `addr` (ourselves
+    /// included); dropped and counted if no link leads there.
+    pub fn forward(self: &Arc<Self>, addr: [u8; 32], packet: Vec<u8>) {
         if addr == self.own_addr {
             self.submit(packet);
         } else if !self.peers.send(&addr, packet) {
@@ -206,6 +227,9 @@ impl Router {
         };
         let replies = self.service.lock().expect("service").handle(msg, now);
         for r in replies {
+            if r.push {
+                self.counters.pushes.fetch_add(1, Ordering::Relaxed);
+            }
             match sphinx::use_surb(&r.surb, &r.message, SizeClass::Small) {
                 Ok((packet, first)) => self.forward(first, packet),
                 Err(_) => self.drop_packet(),
@@ -353,5 +377,43 @@ mod tests {
         assert!(rx.try_recv().is_err(), "delivered before its delay");
         tokio::time::sleep(Duration::from_millis(1000)).await;
         assert!(rx.try_recv().is_ok(), "not delivered after its delay");
+    }
+
+    #[tokio::test]
+    async fn own_loop_is_recognised_not_delivered() {
+        let f = fixture();
+        let token = [0x42; 32];
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        assert!(f
+            .router
+            .loops
+            .lock()
+            .unwrap()
+            .start(token, vec![], deadline));
+        let pkt = build_forward(
+            &envelope::encode(&Message::Loop),
+            &[f.hop],
+            token,
+            &[0],
+            SizeClass::Small,
+            None,
+        )
+        .unwrap();
+        f.router.submit(pkt);
+        assert_eq!(f.router.counters.loops_returned.load(Ordering::Relaxed), 1);
+        assert_eq!(f.router.loops.lock().unwrap().in_flight(), 0);
+        // An unknown token is a phone inbox; none is connected: dropped.
+        let stray = build_forward(
+            &envelope::encode(&Message::Loop),
+            &[f.hop],
+            [0x43; 32],
+            &[0],
+            SizeClass::Small,
+            None,
+        )
+        .unwrap();
+        f.router.submit(stray);
+        assert_eq!(f.router.counters.loops_returned.load(Ordering::Relaxed), 1);
+        assert_eq!(f.router.counters.packets_dropped.load(Ordering::Relaxed), 1);
     }
 }

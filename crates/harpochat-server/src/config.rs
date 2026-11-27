@@ -12,7 +12,7 @@ pub const CONFIG_FILE: &str = "harpochat-server.toml";
 pub const MAX_BLOB_TTL_SECS: u64 = 7 * 86_400;
 
 /// Whole configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
     /// This node.
@@ -25,6 +25,92 @@ pub struct Config {
     pub peers: Vec<PeerConfig>,
     /// Memory limits.
     pub limits: Limits,
+    /// Cover traffic (spec §5, §6.3).
+    pub cover: Cover,
+}
+
+/// Highest configurable rate (frames or packets per second).
+pub const MAX_RATE: f64 = 1000.0;
+
+/// `[cover]`: rates in frames (links) or packets (loops, drops) per second.
+/// `0` disables the mechanism (development only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Cover {
+    /// Frames per second on each outbound node link (real or padding).
+    pub node_link_rate: f64,
+    /// Default frames per second sent to a phone.
+    pub phone_link_rate: f64,
+    /// Lowest rate a phone may request with `CoverRate`.
+    pub phone_link_rate_min: f64,
+    /// Highest rate a phone may request with `CoverRate`.
+    pub phone_link_rate_max: f64,
+    /// Loops emitted by this node per second.
+    pub loop_rate: f64,
+    /// Drops emitted by this node per second.
+    pub drop_rate: f64,
+    /// Mean mix delay of this node's own loops and drops (ms).
+    pub mean_delay_ms: u64,
+}
+
+impl Default for Cover {
+    fn default() -> Self {
+        Self {
+            node_link_rate: 10.0,
+            phone_link_rate: 1.0,
+            phone_link_rate_min: 0.05,
+            phone_link_rate_max: 10.0,
+            loop_rate: 0.2,
+            drop_rate: 0.2,
+            mean_delay_ms: 100,
+        }
+    }
+}
+
+impl Cover {
+    /// Everything off (tests that need exact frame sequences).
+    pub fn off() -> Self {
+        Self {
+            node_link_rate: 0.0,
+            phone_link_rate: 0.0,
+            phone_link_rate_min: 0.0,
+            phone_link_rate_max: 0.0,
+            loop_rate: 0.0,
+            drop_rate: 0.0,
+            mean_delay_ms: 100,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let rates = [
+            ("cover.node_link_rate", self.node_link_rate),
+            ("cover.phone_link_rate", self.phone_link_rate),
+            ("cover.phone_link_rate_min", self.phone_link_rate_min),
+            ("cover.phone_link_rate_max", self.phone_link_rate_max),
+            ("cover.loop_rate", self.loop_rate),
+            ("cover.drop_rate", self.drop_rate),
+        ];
+        for (field, r) in rates {
+            if !r.is_finite() || !(0.0..=MAX_RATE).contains(&r) {
+                return Err(invalid(field, format!("entre 0 et {MAX_RATE} par seconde")));
+            }
+        }
+        if !(self.phone_link_rate_min <= self.phone_link_rate
+            && self.phone_link_rate <= self.phone_link_rate_max)
+        {
+            return Err(invalid(
+                "cover.phone_link_rate",
+                "doit être entre phone_link_rate_min et phone_link_rate_max",
+            ));
+        }
+        if self.mean_delay_ms > harpochat_core::sphinx::MAX_DELAY_MS {
+            return Err(invalid(
+                "cover.mean_delay_ms",
+                format!("au plus {} ms", harpochat_core::sphinx::MAX_DELAY_MS),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `[node]`.
@@ -243,7 +329,7 @@ impl Config {
                 "entre 1 s et 7 jours (spec §7.3)",
             ));
         }
-        Ok(())
+        self.cover.validate()
     }
 
     /// Decoded peer identities and `host:port` endpoints.
@@ -291,6 +377,45 @@ mod tests {
         }];
         let text = c.to_toml();
         assert_eq!(Config::parse(&text), Ok(c));
+    }
+
+    #[test]
+    fn cover_config_validated() {
+        let c = Config::parse(
+            "[cover]
+node_link_rate = 50.0
+loop_rate = 0
+",
+        )
+        .unwrap();
+        assert_eq!(c.cover.node_link_rate, 50.0);
+        assert_eq!(c.validate(), Ok(()));
+        for bad in [
+            "[cover]
+node_link_rate = -1.0
+",
+            "[cover]
+node_link_rate = 5000.0
+",
+            "[cover]
+node_link_rate = nan
+",
+            "[cover]
+phone_link_rate = 20.0
+",
+            "[cover]
+phone_link_rate_min = 2.0
+",
+            "[cover]
+mean_delay_ms = 600000
+",
+        ] {
+            let c = Config::parse(bad).unwrap();
+            assert!(c.validate().is_err(), "{bad}");
+        }
+        let mut off = Config::default();
+        off.cover = Cover::off();
+        assert_eq!(off.validate(), Ok(()));
     }
 
     #[test]

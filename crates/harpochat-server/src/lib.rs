@@ -7,6 +7,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod cover;
 pub mod keystore;
 pub mod net;
 pub mod node;
