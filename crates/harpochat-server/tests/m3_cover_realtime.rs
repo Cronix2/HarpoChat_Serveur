@@ -213,13 +213,24 @@ async fn loops_return_in_healthy_mesh() {
     let mesh = start_mesh(5, fast_cover()).await;
     let roots: Vec<[u8; 32]> = mesh.iter().map(|m| m.id).collect();
     directory(&mesh[0], &roots, 5).await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    // Cover is a Poisson process: wait until every node has sent and got
+    // back loops and sent drops (rates 2/s and 1/s), within a deadline.
+    let all_active = || {
+        mesh.iter().all(|m| {
+            let c = &m.router.counters;
+            c.loops_returned.load(Ordering::Relaxed) > 0 && c.drops_sent.load(Ordering::Relaxed) > 0
+        })
+    };
+    let start = Instant::now();
+    while !all_active() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "cover never started everywhere"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     for m in &mesh {
-        let c = &m.router.counters;
-        assert!(c.loops_sent.load(Ordering::Relaxed) > 0);
-        assert!(c.loops_returned.load(Ordering::Relaxed) > 0);
-        assert!(c.drops_sent.load(Ordering::Relaxed) > 0);
-        assert_eq!(c.loops_lost.load(Ordering::Relaxed), 0);
+        assert_eq!(m.router.counters.loops_lost.load(Ordering::Relaxed), 0);
         assert!(m.router.loops.lock().unwrap().suspects().is_empty());
     }
 }

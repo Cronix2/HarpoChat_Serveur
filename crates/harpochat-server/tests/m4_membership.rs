@@ -34,7 +34,21 @@ struct Running {
     addr: SocketAddr,
     id: [u8; 32],
     membership: Arc<Membership>,
+    router: Arc<harpochat_server::router::Router>,
+    peers: Arc<harpochat_server::peers::Peers>,
     _stop: oneshot::Sender<()>,
+}
+
+fn counters(name: &str, r: &Running) -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let c = &r.router.counters;
+    format!(
+        "{name}: in {} dropped {} delivered {} peers {}",
+        c.packets_in.load(Relaxed),
+        c.packets_dropped.load(Relaxed),
+        c.delivered.load(Relaxed),
+        r.peers.ids().len()
+    )
 }
 
 async fn bind() -> (TcpListener, String) {
@@ -56,6 +70,8 @@ fn start(dir: &Path, listener: TcpListener) -> Running {
     let id = node.keys.identity.public();
     let server = Server::new(node, system_clock()).unwrap();
     let membership = server.membership();
+    let router = server.router();
+    let peers = server.peers();
     let addr = listener.local_addr().unwrap();
     let (stop, rx) = oneshot::channel();
     tokio::spawn(async move {
@@ -69,6 +85,8 @@ fn start(dir: &Path, listener: TcpListener) -> Running {
         addr,
         id,
         membership,
+        router,
+        peers,
         _stop: stop,
     }
 }
@@ -154,13 +172,40 @@ async fn join_chain_and_revoke() {
     assert_eq!(k_entry.sponsor, Some(j.id));
 
     // A message crosses the three admitted nodes (gateway J → mix → mailbox,
-    // replies back through a SURB) — once every node knows the others.
+    // replies back through a SURB) — once every node knows the others, and
+    // R announces the Sphinx key each node uses now (not the one of `join`).
     wait_directory(&j, &roots, "all at J", |n| n.len() == 3).await;
     wait_directory(&k, &roots, "all at K", |n| n.len() == 3).await;
+    let current = |who: &Running, own: &[VerifiedNode]| {
+        own.iter()
+            .find(|n| n.descriptor.id_pub == who.id)
+            .unwrap()
+            .descriptor
+            .sphinx_pub
+    };
+    let (j_key, k_key) = (
+        current(&j, &wait_directory(&j, &roots, "J", |_| true).await),
+        current(&k, &wait_directory(&k, &roots, "K", |_| true).await),
+    );
+    let nodes = wait_directory(&r, &roots, "current keys at R", |n| {
+        n.len() == 3 && current(&j, n) == j_key && current(&k, n) == k_key
+    })
+    .await;
     let cands: Vec<Candidate> = nodes.iter().map(Candidate::from).collect();
     let endpoints = [(r.addr, r.id), (j.addr, j.id), (k.addr, k.id)];
     tokio::time::sleep(Duration::from_secs(2)).await; // links up both ways
-    let (_, blobs) = exchange(&endpoints, &cands, 1, 2, b"via joined nodes").await;
+    let before = [counters("R", &r), counters("J", &j), counters("K", &k)];
+    let ex =
+        tokio::spawn(async move { exchange(&endpoints, &cands, 1, 2, b"via joined nodes").await })
+            .await;
+    let after = [counters("R", &r), counters("J", &j), counters("K", &k)];
+    let (_, blobs) = ex.unwrap_or_else(|e| {
+        panic!(
+            "{e}
+before {before:?}
+after {after:?}"
+        )
+    });
     assert_eq!(blobs, vec![b"via joined nodes".to_vec()]);
 
     // R (a root) revokes K: gone from R at once, then from J by gossip.

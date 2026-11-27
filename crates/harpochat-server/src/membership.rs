@@ -81,7 +81,11 @@ impl Membership {
         }
     }
 
-    fn add_entry(&self, st: &mut State, e: DirectoryEntry) {
+    /// Add or update an entry. `authoritative` when it comes from the node
+    /// itself (its own directory): it then replaces what we hold even with
+    /// the same `valid_until` — e.g. the new Sphinx key of a node that just
+    /// started, after its sponsor published the descriptor sent at `join`.
+    fn add_entry(&self, st: &mut State, e: DirectoryEntry, authoritative: bool) {
         let Ok(d) = e.descriptor.peek() else { return };
         if d.id_pub == self.own {
             return;
@@ -91,10 +95,10 @@ impl Membership {
                 st.seen_links.insert((v.node_id, v.sponsor_id));
             }
         }
-        let newer = st
-            .entries
-            .get(&d.id_pub)
-            .is_none_or(|old| valid_until(old) < d.valid_until);
+        let newer = st.entries.get(&d.id_pub).is_none_or(|old| {
+            let held = valid_until(old);
+            held < d.valid_until || (authoritative && held <= d.valid_until)
+        });
         if newer && (st.entries.len() < MAX_DIRECTORY_ENTRIES || st.entries.contains_key(&d.id_pub))
         {
             st.entries.insert(d.id_pub, e);
@@ -161,7 +165,8 @@ impl Membership {
             Self::add_revocation(&mut st, r);
         }
         for e in d.entries {
-            self.add_entry(&mut st, e);
+            let own = e.descriptor.peek().is_ok_and(|x| x.id_pub == d.issuer);
+            self.add_entry(&mut st, e, own);
         }
         self.prune_revocations(&mut st);
         self.reverify(&mut st, now)
@@ -170,7 +175,7 @@ impl Membership {
     /// Add an entry this node vouched for itself.
     pub fn insert(&self, entry: DirectoryEntry, now: u64) -> Changes {
         let mut st = self.state.lock().expect("membership");
-        self.add_entry(&mut st, entry);
+        self.add_entry(&mut st, entry, false);
         self.reverify(&mut st, now)
     }
 
@@ -535,5 +540,41 @@ mod tests {
         // …then a stale peer still lists B: the revocation holds.
         m.merge(&directory_of(r, vec![b_entry], vec![]), NOW);
         assert!(!m.is_member(&b.public()));
+    }
+
+    #[test]
+    fn a_node_is_authoritative_about_itself() {
+        let root_keys = NodeKeys::generate();
+        let r = &root_keys.identity;
+        let me = member_node(r);
+        let m = Membership::new(&me);
+        let a = SigningKey::generate();
+        // The sponsor publishes the descriptor A sent at join time…
+        let at_join = DirectoryEntry {
+            descriptor: desc(&a, NOW + 900),
+            chain: vec![vouch(r, &a)],
+        };
+        m.merge(&directory_of(r, vec![at_join], vec![]), NOW);
+        // …then A starts with a new Sphinx key, in the same second.
+        let mut d = desc(&a, NOW + 900).peek().unwrap();
+        d.sphinx_pub = [0x77; 32];
+        let fresh = DirectoryEntry {
+            descriptor: Signed::sign(&a, &d),
+            chain: vec![vouch(r, &a)],
+        };
+        // A third party's copy with the same validity does not win…
+        m.merge(&directory_of(r, vec![fresh.clone()], vec![]), NOW);
+        let key_of = |m: &Membership| {
+            m.nodes(&me, NOW)
+                .into_iter()
+                .find(|n| n.descriptor.id_pub == a.public())
+                .unwrap()
+                .descriptor
+                .sphinx_pub
+        };
+        assert_eq!(key_of(&m), [3; 32]);
+        // …A's own directory does.
+        m.merge(&directory_of(&a, vec![fresh], vec![]), NOW);
+        assert_eq!(key_of(&m), [0x77; 32]);
     }
 }
