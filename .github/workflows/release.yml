@@ -142,7 +142,7 @@ jobs:
             --remap-path-prefix=crates/harpochat-core-ffi=ffi
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT}"
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 26 \
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 --platform 28 \
             -o dist/jniLibs build --release --locked -p harpochat-core-ffi
       - name: Discretion check (the .so must not name the app)
         # Only the protocol's domain-separation labels may remain (spec §5).

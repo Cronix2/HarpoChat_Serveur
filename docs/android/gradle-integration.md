@@ -17,16 +17,17 @@ artefact. Contenu de l'archive :
 jniLibs/arm64-v8a/libcorekit.so
 jniLibs/armeabi-v7a/libcorekit.so
 jniLibs/x86_64/libcorekit.so
-kotlin/app/harpochat/core/corekit.kt                 bindings générés (uniffi 0.33), package app.harpochat.core
+kotlin/org/corekit/corekit.kt                        bindings générés (uniffi 0.33), package org.corekit
 test-vectors/v1.json                                 vecteurs à rejouer dans vos tests
 ```
 
-Les `.so` sont compilés avec `minSdk` 26 (`--platform 26`), comme l'app.
+Les `.so` sont compilés pour l'API 28 (`--platform 28`) : les bindings en mode Android utilisent
+`reachabilityFence`, qui impose Android 9 minimum (`minSdk = 28`).
 
 ## 2. Gradle
 
-1. Copiez `jniLibs/` dans `app/src/main/jniLibs/`, et `kotlin/app/harpochat/core/` dans
-   `app/src/main/java/app/harpochat/core/`. Ces fichiers sont générés : ne les modifiez pas, remplacez-les à
+1. Copiez `jniLibs/` dans `app/src/main/jniLibs/`, et `kotlin/org/corekit/` dans
+   `app/src/main/java/org/corekit/`. Ces fichiers sont générés : ne les modifiez pas, remplacez-les à
    chaque nouvelle version du noyau.
 2. Ajoutez JNA, dont dépendent les bindings uniffi, et `androidx.annotation` : les bindings sont
    générés en mode Android (`android = true`), avec des gardes `@RequiresApi` sur l'API 34.
@@ -39,8 +40,8 @@ dependencies {
 }
 ```
 
-**Discrétion.** La bibliothèque native s'appelle `libcorekit.so` : ni son nom, ni ses symboles
-exportés (`uniffi_corekit_…`), ni ses chemins de compilation ne nomment l'app. Il reste une dizaine
+**Discrétion.** La bibliothèque native s'appelle `libcorekit.so` et le package Kotlin `org.corekit` : ni leurs noms, ni les symboles
+exportés (`uniffi_corekit_…`), ni les chemins de compilation ne nomment l'app. Il reste une dizaine
 d'occurrences de « harpochat » : ce sont les étiquettes de séparation de domaine du protocole
 (`harpochat/v1/…`), fixées par la spec et nécessaires à l'interopérabilité. La CI échoue si la
 bibliothèque en contient davantage.
@@ -50,7 +51,7 @@ bibliothèque en contient davantage.
 ```proguard
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.** { *; }
--keep class app.harpochat.core.** { *; }
+-keep class org.corekit.** { *; }
 -dontwarn java.awt.**
 ```
 
@@ -61,7 +62,7 @@ Le noyau ne fait **aucune** I/O : vous gardez OkHttp pour le WebSocket. Le test 
 et sert de référence exécutable.
 
 ```kotlin
-import app.harpochat.core.*
+import org.corekit.*
 
 // 1. TLS (accepter tout certificat) + WebSocket binaire vers wss://<nœud>/  — OkHttp.
 // 2. Noise XX, le téléphone est l'initiateur :
