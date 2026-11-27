@@ -1,5 +1,6 @@
 [bindings.kotlin]
-package_name = "app.harpochat.core"
+# Neutral package too: nothing in the APK names the app.
+package_name = "org.corekit"
 # Neutral native name: the .so and its exported symbols do not name the app.
 cdylib_name = "corekit"
 # Android flavour: API-level guards with @RequiresApi (androidx.annotation).
