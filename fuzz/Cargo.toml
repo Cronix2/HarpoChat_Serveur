@@ -1,0 +1,89 @@
+# Fuzz targets for cargo-fuzz (nightly). Outside the workspace on purpose:
+#   cargo +nightly fuzz run <target> -- -max_total_time=86400
+# Each target wraps one body of `harpochat_server::fuzzing`.
+[package]
+name = "harpochat-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+harpochat-server = { path = "../crates/harpochat-server" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "link_frame"
+path = "fuzz_targets/link_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sphinx_packet"
+path = "fuzz_targets/sphinx_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "noise_handshake"
+path = "fuzz_targets/noise_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "directory"
+path = "fuzz_targets/directory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token"
+path = "fuzz_targets/token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bootstrap"
+path = "fuzz_targets/bootstrap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "join_request"
+path = "fuzz_targets/join_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mailbox_service"
+path = "fuzz_targets/mailbox_service.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false

@@ -1,7 +1,7 @@
 # HarpoChat Server — architecture
 
 > **Pour :** toute personne qui découvre le projet, y compris le jury. Mise à jour à chaque phase.
-> **État :** phases P1 (noyau) et P3 (binaire `harpochat-server`, releases signées) terminées, en revue.
+> **État :** phases P1 à P5 terminées (noyau, bindings Android, binaire, nœud joignable, mesh multi-nœuds), en revue.
 
 ## 1. Le problème
 
@@ -44,12 +44,64 @@ crates/harpochat-core   noyau partagé serveur + Android, pur (aucun I/O, aucun 
   descriptor, directory descripteurs de nœuds, parrainage, révocation, annuaire signé
   invite, bootstrap     jetons hcn1- d'admission, bloc d'amorçage de l'app
   link, sphinx          trames de taille fixe, routage Sphinx et SURB
+  path                  choix des routes (client et leurres des nœuds), placement des boîtes
   test-vectors/v1.json  vecteurs figés, rejoués par les CI serveur et Android
 ```
 
 ```text
-crates/harpochat-server  binaire du nœud : config TOML, node.key, init / run (réseau en P4)
+crates/harpochat-core-ffi  bindings Kotlin (uniffi) du noyau, pour l'app Android
+crates/harpochat-server  binaire du nœud
+  config, keystore, node, cli   harpochat-server.toml, node.key, init / run
+  net, server                   TLS + WebSocket + Noise, liens téléphone et nœud
+  peers                         liens sortants vers les autres nœuds (configurés ou appris)
+  membership                    vue du mesh : fusion des annuaires (gossip), revérification
+  sponsor, join                 parrainage : jetons, côté parrain et côté nouveau nœud
+  router                        couche Sphinx : anti-rejeu, délais, transmission, remise
+  service, store                boîtes aux lettres en RAM, abonnements SURB (PUSH / NOTIFY)
+  cover                         façonnage des liens, loops et drops du nœud, mesure des pertes
+  fuzzing                       corps des cibles de fuzzing (fuzz/, CI)
+  winservice                    service Windows (packaging/systemd pour Linux)
 ```
+
+```text
+fuzz/        cibles cargo-fuzz (nightly), hors workspace
+packaging/   unité systemd durcie
+scripts/     build reproductible, vérification d'une release, démonstration
+```
+
+### Durcissement (P8)
+
+- **Entrées hostiles :** dix cibles de fuzzing couvrent tout ce qui arrive du réseau : trames,
+  enveloppes, Sphinx, Noise, annuaires, jetons, demandes d'admission, service de boîtes,
+  configuration. Elles tournent sous libFuzzer en CI, et sur stable à chaque build.
+- **Charge :** plafond de liens et de poignées de main. Au-delà, la connexion est fermée tout de
+  suite, et la boucle d'acceptation n'attend jamais.
+- **Anti-rejeu :** un filtre de Bloom à clé secrète par clé Sphinx, de taille fixe (environ 7 Mo).
+  Un faux positif ne coûte qu'un paquet perdu.
+- **Clés Sphinx :** renouvelées chaque semaine. L'ancienne est acceptée une semaine de plus, puis
+  effacée.
+- **Logs :** totaux agrégés seulement, vérifiés par un test boîte noire.
+- **Binaire :** build reproductible (CI : deux compilations, même SHA-256) et signature Sigstore.
+
+### Admission par parrainage (P7)
+
+Un nœud n'entre dans le mesh que par une chaîne de certificats `Vouch` qui remonte à une racine
+embarquée dans l'app. Le parrain émet un jeton autoporteur (`invite-node`). Le nouveau nœud le
+présente (`join`) en prouvant, par Noise, l'identité de son descripteur. Le parrain brûle le jeton
+et signe le certificat. Chaque nœud fusionne ensuite les annuaires de ses voisins toutes les 5 s et
+revérifie tout : chaînes, révocations, limite de 3 parrainages par 30 jours. Il ne se relie qu'aux
+nœuds qui passent ces vérifications. Un nœud qui n'a pas de chaîne valide n'est accepté par
+personne, ni par les autres nœuds ni par les apps : c'est la barrière contre les faux serveurs.
+
+### Trafic de couverture (P6)
+
+Chaque lien sortant émet ses trames aux instants d'un processus de Poisson. À chaque instant, la
+trame réelle suivante part, ou une trame de padding s'il n'y en a pas. Ces instants sont tirés
+**avant** de regarder la file : le test `shaped_instants_do_not_depend_on_traffic` vérifie qu'avec
+la même graine, un lien inactif et un lien chargé à 50 % émettent exactement aux mêmes instants. Seul
+le contenu chiffré diffère, et il est invisible. Les nœuds émettent aussi leurs propres loops et
+drops, mêlés au trafic réel. Les loops qui ne reviennent pas désignent localement les voisins qui
+perdent des paquets.
 
 ## 5. Choix cryptographiques
 
@@ -71,11 +123,11 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 
 | Phase | Contenu | État |
 |---|---|---|
-| P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé, en revue** |
-| P2 | Bindings Android (uniffi) | à faire |
-| P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
-| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | à faire |
-| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | à faire |
-| P6 | Trafic de couverture, temps réel (M3, M3b) | à faire |
-| P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | à faire |
-| P8 | Fuzzing, audit des logs, builds reproductibles (M5) | à faire |
+| P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé** |
+| P2 | Bindings Android (uniffi) | **terminé** |
+| P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé** |
+| P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé** |
+| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé** |
+| P6 | Trafic de couverture, temps réel (M3, M3b) | **terminé, en revue** |
+| P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | **terminé, en revue** |
+| P8 | Fuzzing, audit des logs, builds reproductibles, services, dossier jury (M5) | **terminé, en revue** |

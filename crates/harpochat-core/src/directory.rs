@@ -8,8 +8,16 @@
 //!
 //! A `Revoke` only counts if signed by the revoked node's own sponsor (as seen
 //! in the chain being checked) or by a root.
+//!
+//! **Sponsorship limit** (spec §4.3): a sponsor vouches for at most
+//! [`SPONSOR_LIMIT`] nodes in any [`SPONSOR_PERIOD_SECS`] window of `issued`.
+//! Every verifier enforces it over the vouches it sees, so a compromised
+//! sponsor cannot flood the mesh: excess vouches (latest `issued` first, then
+//! highest `node_id`) are void, and so is every entry whose chain uses one.
+//! A vouch issued before its sponsor's own vouch is void too, so backdating
+//! cannot reach before the sponsor's admission.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +35,10 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 512;
 pub const MAX_REVOCATIONS: usize = 1024;
 /// Tolerated clock skew for `issued` timestamps.
 pub const CLOCK_SKEW_SECS: u64 = 600;
+/// Vouches a sponsor may issue per period (spec §4.3).
+pub const SPONSOR_LIMIT: usize = 3;
+/// Sponsorship period (spec §4.3: 30 days).
+pub const SPONSOR_PERIOD_SECS: u64 = 30 * 86_400;
 
 /// Sponsorship certificate: `sponsor_id` admits `node_id` into the mesh.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,9 +183,13 @@ pub fn verify_entry(
     let mut current = node;
     for (i, link) in links.iter().enumerate() {
         let next_sponsor = links.get(i + 1).map(|l| &l.sponsor_id);
+        // A sponsor cannot vouch before it was itself admitted: this bounds
+        // how far a compromised sponsor can backdate to dodge the limit.
+        let after_own_admission = links.get(i + 1).is_none_or(|up| link.issued >= up.issued);
         let ok = link.v == VERSION
             && link.node_id == current
             && link.issued <= now_unix_secs.saturating_add(CLOCK_SKEW_SECS)
+            && after_own_admission
             && seen.insert(link.sponsor_id);
         if !ok {
             return Err(CoreError::Untrusted);
@@ -199,8 +215,76 @@ pub fn verify_entry(
     })
 }
 
-/// Verify a directory: issuer signature, then each entry. Invalid entries
-/// and revocations are dropped rather than failing the whole directory.
+/// Vouches void under the sponsorship limit, as `(sponsor, node)` pairs.
+fn over_limit(links: &[Vouch]) -> HashSet<([u8; 32], [u8; 32])> {
+    // Earliest vouch of each (sponsor, node) pair, grouped by sponsor.
+    let mut by_sponsor: BTreeMap<[u8; 32], HashMap<[u8; 32], u64>> = BTreeMap::new();
+    for l in links {
+        let issued = by_sponsor
+            .entry(l.sponsor_id)
+            .or_default()
+            .entry(l.node_id)
+            .or_insert(l.issued);
+        *issued = (*issued).min(l.issued);
+    }
+    let mut void = HashSet::new();
+    for (sponsor, nodes) in by_sponsor {
+        let mut sorted: Vec<(u64, [u8; 32])> = nodes.into_iter().map(|(n, t)| (t, n)).collect();
+        sorted.sort();
+        let mut accepted: Vec<u64> = Vec::new();
+        for (issued, node) in sorted {
+            let in_window = accepted
+                .iter()
+                .filter(|t| issued.saturating_sub(**t) < SPONSOR_PERIOD_SECS)
+                .count();
+            if in_window < SPONSOR_LIMIT {
+                accepted.push(issued);
+            } else {
+                void.insert((sponsor, node));
+            }
+        }
+    }
+    void
+}
+
+/// Verify entries against the roots and (already signature-checked)
+/// revocations, then apply the sponsorship limit. Returns the entries that
+/// pass, with their verified form, in input order.
+pub fn verify_entries(
+    entries: &[DirectoryEntry],
+    revocations: &[Revoke],
+    roots: &[[u8; 32]],
+    now_unix_secs: u64,
+) -> Vec<(DirectoryEntry, VerifiedNode)> {
+    let ok: Vec<(DirectoryEntry, VerifiedNode)> = entries
+        .iter()
+        .filter_map(|e| {
+            verify_entry(e, roots, revocations, now_unix_secs)
+                .ok()
+                .map(|v| (e.clone(), v))
+        })
+        .collect();
+    let links: Vec<Vouch> = ok
+        .iter()
+        .flat_map(|(e, _)| e.chain.iter().filter_map(|v| v.peek().ok()))
+        .collect();
+    let void = over_limit(&links);
+    if void.is_empty() {
+        return ok;
+    }
+    ok.into_iter()
+        .filter(|(e, _)| {
+            e.chain
+                .iter()
+                .filter_map(|v| v.peek().ok())
+                .all(|l| !void.contains(&(l.sponsor_id, l.node_id)))
+        })
+        .collect()
+}
+
+/// Verify a directory: issuer signature, then each entry and the
+/// sponsorship limit. Invalid entries and revocations are dropped rather
+/// than failing the whole directory.
 pub fn verify_directory(
     d: &Signed<Directory>,
     roots: &[[u8; 32]],
@@ -218,11 +302,12 @@ pub fn verify_directory(
         .iter()
         .filter_map(|r| r.verify().ok())
         .collect();
-    Ok(dir
-        .entries
-        .iter()
-        .filter_map(|e| verify_entry(e, roots, &revocations, now_unix_secs).ok())
-        .collect())
+    Ok(
+        verify_entries(&dir.entries, &revocations, roots, now_unix_secs)
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect(),
+    )
 }
 
 /// Nodes present, with the same identity **and** Sphinx key, in every view
@@ -551,5 +636,86 @@ mod tests {
         let ids: Vec<[u8; 32]> = common.iter().map(|n| n.descriptor.id_pub).collect();
         assert_eq!(ids, vec![r.public()]);
         assert!(intersect(&[]).is_empty());
+    }
+
+    #[test]
+    fn sponsor_limit_enforced_by_verifiers() {
+        let r = key(1);
+        let roots = vec![r.public()];
+        // The root vouches 5 nodes on the same day: only the first 3 count.
+        let kids: Vec<SigningKey> = (10..15).map(key).collect();
+        let entries: Vec<DirectoryEntry> = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| entry(k, vec![vouch(&r, k, NOW - 100 + i as u64)]))
+            .collect();
+        let ok = verify_entries(&entries, &[], &roots, NOW);
+        let ids: Vec<[u8; 32]> = ok.iter().map(|(_, v)| v.descriptor.id_pub).collect();
+        assert_eq!(
+            ids,
+            kids[..3].iter().map(|k| k.public()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn limit_window_slides() {
+        let r = key(1);
+        let roots = vec![r.public()];
+        let kids: Vec<SigningKey> = (10..14).map(key).collect();
+        // Three vouches, then a fourth 30 days after the first: accepted.
+        let t0 = NOW - SPONSOR_PERIOD_SECS - 10;
+        let times = [t0, t0 + 1, t0 + 2, t0 + SPONSOR_PERIOD_SECS];
+        let entries: Vec<DirectoryEntry> = kids
+            .iter()
+            .zip(times)
+            .map(|(k, t)| entry(k, vec![vouch(&r, k, t)]))
+            .collect();
+        assert_eq!(verify_entries(&entries, &[], &roots, NOW).len(), 4);
+        // One day earlier, the fourth is over the limit.
+        let mut early = entries.clone();
+        early[3] = entry(
+            &kids[3],
+            vec![vouch(&r, &kids[3], t0 + SPONSOR_PERIOD_SECS - 86_400)],
+        );
+        assert_eq!(verify_entries(&early, &[], &roots, NOW).len(), 3);
+    }
+
+    #[test]
+    fn rejected_vouch_voids_descendants() {
+        let r = key(1);
+        let roots = vec![r.public()];
+        let kids: Vec<SigningKey> = (10..14).map(key).collect();
+        let mut entries: Vec<DirectoryEntry> = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| entry(k, vec![vouch(&r, k, NOW - 100 + i as u64)]))
+            .collect();
+        // kids[3] is over the limit; a node it sponsored is void too.
+        let grandchild = key(20);
+        entries.push(entry(
+            &grandchild,
+            vec![
+                vouch(&kids[3], &grandchild, NOW - 10),
+                vouch(&r, &kids[3], NOW - 97),
+            ],
+        ));
+        let ok = verify_entries(&entries, &[], &roots, NOW);
+        assert_eq!(ok.len(), 3);
+        assert!(ok
+            .iter()
+            .all(|(_, v)| v.descriptor.id_pub != grandchild.public()));
+    }
+
+    #[test]
+    fn vouch_before_sponsor_admission_rejected() {
+        let (r, a, b, roots) = setup();
+        // A was admitted at NOW - 100; a vouch by A dated earlier is void.
+        let early = entry(&b, vec![vouch(&a, &b, NOW - 200), vouch(&r, &a, NOW - 100)]);
+        assert_eq!(
+            verify_entry(&early, &roots, &[], NOW),
+            Err(CoreError::Untrusted)
+        );
+        let fine = entry(&b, vec![vouch(&a, &b, NOW - 50), vouch(&r, &a, NOW - 100)]);
+        assert!(verify_entry(&fine, &roots, &[], NOW).is_ok());
     }
 }

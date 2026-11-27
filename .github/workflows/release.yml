@@ -47,18 +47,17 @@ jobs:
       - name: Install zig + cargo-zigbuild
         if: matrix.zig
         run: |
-          pip3 install --user ziglang
+          pip3 install --user ziglang==0.13.0
           cargo install cargo-zigbuild --locked
-      - name: Build (musl, static)
+      - name: Build (musl, static, reproducible)
         if: matrix.zig
-        env:
-          RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}=. --remap-path-prefix=/home/runner/.cargo=/cargo"
-        run: cargo zigbuild --release --locked -p harpochat-server --target ${{ matrix.target }}
+        run: scripts/build-release.sh ${{ matrix.target }}
       - name: Build (Windows, static CRT)
         if: ${{ !matrix.zig }}
         shell: bash
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static --remap-path-prefix=${{ github.workspace }}=."
+          # /Brepro: no link timestamp in the PE header (deterministic output).
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/Brepro --remap-path-prefix=${{ github.workspace }}=. --remap-path-prefix=C:/Users/runneradmin/.cargo=/cargo"
         run: cargo build --release --locked -p harpochat-server --target ${{ matrix.target }}
       - name: Rename artifact
         shell: bash

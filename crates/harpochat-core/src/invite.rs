@@ -4,8 +4,8 @@
 //! A sponsor runs `harpochat-server invite-node` and gets a token to paste on
 //! the new machine. The token is `hcn1-` + Crockford Base32 of a CBOR
 //! `Signed<NodeInvite>`. It contains a one-time secret: it must travel over a
-//! trusted channel and never be logged. Burning the secret after one use is
-//! the sponsor server's job.
+//! trusted channel and never be logged. The new node sends it back inside its
+//! [`JoinRequest`]; the sponsor checks its own signature, then burns it.
 
 use core::fmt;
 
@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::bootstrap::RootEntry;
 use crate::descriptor::{validate_endpoint, NodeDescriptor};
+use crate::directory::Vouch;
 use crate::keys::Hex;
 use crate::signed::{Signed, SignedPayload};
 use crate::{cbor, domain, CoreError, Result};
@@ -85,6 +87,12 @@ pub fn encode_token(invite: &Signed<NodeInvite>) -> String {
 /// lowercase, and the Crockford look-alikes `O`→`0`, `I`/`L`→`1`. Verifies the
 /// sponsor's signature and the expiry.
 pub fn decode_token(text: &str, now_unix_secs: u64) -> Result<NodeInvite> {
+    decode_signed_token(text, now_unix_secs)?.verify()
+}
+
+/// Like [`decode_token`], keeping the signed form (sent back to the sponsor
+/// in [`JoinRequest`]).
+pub fn decode_signed_token(text: &str, now_unix_secs: u64) -> Result<Signed<NodeInvite>> {
     let compact: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     let lower = compact.to_ascii_lowercase();
     if !lower.starts_with(TOKEN_PREFIX) {
@@ -124,19 +132,49 @@ pub fn decode_token(text: &str, now_unix_secs: u64) -> Result<NodeInvite> {
     if invite.expires <= now_unix_secs {
         return Err(CoreError::Expired);
     }
-    Ok(invite)
+    Ok(signed)
 }
 
 /// First message of the `join` protocol, sent by the new node to its sponsor
-/// over Noise.
+/// over Noise. It carries the invite itself, so the sponsor needs no state to
+/// recognise its own tokens: it checks its signature, then burns it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JoinRequest {
+    /// The invite, as pasted (signed by the sponsor).
+    pub invite: Signed<NodeInvite>,
     /// The new node's self-signed descriptor.
     pub descriptor: Signed<NodeDescriptor>,
     /// `HMAC-SHA256(secret, descriptor.body)`.
     #[serde(with = "serde_bytes")]
     pub proof: [u8; 32],
+}
+
+/// The sponsor's answer. A refusal is uniform (`vouch: None`, nothing else)
+/// and never says why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinResponse {
+    /// Format version.
+    pub v: u8,
+    /// Vouch for the new node, signed by the sponsor.
+    pub vouch: Option<Signed<Vouch>>,
+    /// The sponsor's own chain up to a root (empty if it is a root).
+    pub chain: Vec<Signed<Vouch>>,
+    /// Roots the sponsor trusts: the new node's trust anchors.
+    pub roots: Vec<RootEntry>,
+}
+
+impl JoinResponse {
+    /// The uniform refusal.
+    pub fn refusal() -> Self {
+        Self {
+            v: 1,
+            vouch: None,
+            chain: Vec::new(),
+            roots: Vec::new(),
+        }
+    }
 }
 
 fn mac(secret: &[u8; 32]) -> Hmac<Sha256> {
@@ -200,6 +238,50 @@ mod tests {
         let s = SigningKey::from_seed(&[1; 32]);
         let token = encode_token(&Signed::sign(&s, &invite(&s)));
         assert_eq!(decode_token(&token, NOW), Ok(invite(&s)));
+    }
+
+    #[test]
+    fn signed_token_roundtrip() {
+        let s = SigningKey::from_seed(&[1; 32]);
+        let signed = Signed::sign(&s, &invite(&s));
+        let back = decode_signed_token(&encode_token(&signed), NOW).unwrap();
+        assert_eq!(back, signed);
+        assert_eq!(
+            decode_signed_token(&encode_token(&signed), NOW + INVITE_TTL_SECS),
+            Err(CoreError::Expired)
+        );
+    }
+
+    #[test]
+    fn join_response_roundtrip() {
+        let s = SigningKey::from_seed(&[1; 32]);
+        let n = SigningKey::from_seed(&[7; 32]);
+        let r = JoinResponse {
+            v: 1,
+            vouch: Some(Signed::sign(
+                &s,
+                &Vouch {
+                    v: 1,
+                    node_id: n.public(),
+                    sponsor_id: s.public(),
+                    issued: NOW,
+                },
+            )),
+            chain: vec![],
+            roots: vec![RootEntry {
+                id_pub: s.public(),
+                endpoints: vec!["wss://r.example".into()],
+            }],
+        };
+        let bytes = cbor::to_vec(&r);
+        assert_eq!(cbor::from_slice::<JoinResponse>(&bytes, 4096), Ok(r));
+        let refusal = cbor::to_vec(&JoinResponse::refusal());
+        assert_eq!(
+            cbor::from_slice::<JoinResponse>(&refusal, 4096)
+                .unwrap()
+                .vouch,
+            None
+        );
     }
 
     #[test]
@@ -276,7 +358,9 @@ mod tests {
     fn join_proof_roundtrip() {
         let n = SigningKey::from_seed(&[7; 32]);
         let d = descriptor(&n);
+        let s = SigningKey::from_seed(&[1; 32]);
         let req = JoinRequest {
+            invite: Signed::sign(&s, &invite(&s)),
             proof: join_proof(&[0x5A; 32], &d),
             descriptor: d,
         };
@@ -291,7 +375,9 @@ mod tests {
     fn join_proof_rejects_other_descriptor() {
         let d1 = descriptor(&SigningKey::from_seed(&[7; 32]));
         let d2 = descriptor(&SigningKey::from_seed(&[8; 32]));
+        let s = SigningKey::from_seed(&[1; 32]);
         let req = JoinRequest {
+            invite: Signed::sign(&s, &invite(&s)),
             proof: join_proof(&[0x5A; 32], &d1),
             descriptor: d2,
         };

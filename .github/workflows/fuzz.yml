@@ -1,0 +1,67 @@
+name: Fuzz
+
+# libFuzzer on every network-facing parser (harpochat_server::fuzzing).
+# - Pull requests: 60 s per target, to catch regressions early.
+# - Weekly: 5 h 45 per target (GitHub caps a job at 6 h); four weekly runs
+#   reach the 24 h of the M5 criterion, the corpus being kept between runs.
+# - Manual: any duration (workflow_dispatch).
+# A crash fails the job and uploads the reproducing input.
+
+on:
+  pull_request:
+    paths: ["crates/**", "fuzz/**", ".github/workflows/fuzz.yml"]
+  schedule:
+    - cron: "17 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Durée par cible (s)"
+        default: "3600"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - link_frame
+          - envelope
+          - sphinx_packet
+          - noise_handshake
+          - directory
+          - token
+          - bootstrap
+          - join_request
+          - mailbox_service
+          - config
+    steps:
+      - uses: actions/checkout@v4
+      - name: Nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-fuzz --locked
+      - name: Corpus cache
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Run
+        env:
+          SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '20700' || github.event.inputs.seconds || '60' }}
+        run: |
+          cd fuzz
+          mkdir -p corpus/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+            -max_total_time="${SECONDS_PER_TARGET}" -rss_limit_mb=2048 -timeout=10
+      - name: Crash input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
