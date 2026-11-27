@@ -2,8 +2,8 @@
 //! Sphinx router (spec §6–7): peel one layer, enforce replay protection,
 //! apply the sender-chosen delay, deliver locally or to a phone inbox.
 //!
-//! In M1 every route is this single node: forwarding to other nodes arrives
-//! in P5. Packets are never processed in arrival order without their delay
+//! Packets for another node go to its peer link (`Peers`) after the
+//! sender-chosen delay. Packets are never processed in arrival order without their delay
 //! (spec §6.2: no FIFO).
 
 use std::collections::HashMap;
@@ -18,6 +18,7 @@ use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
 use harpochat_core::sphinx::{self, Processed, LOCAL_DELIVERY};
 use tokio::sync::mpsc;
 
+use crate::peers::Peers;
 use crate::service::MailboxService;
 use crate::store::SeenCache;
 
@@ -93,6 +94,7 @@ pub struct Router {
     own_addr: [u8; 32],
     replay: Mutex<SeenCache>,
     service: Mutex<MailboxService>,
+    peers: Arc<Peers>,
     /// Connected phones.
     pub inboxes: Arc<Inboxes>,
     /// Counters.
@@ -106,6 +108,7 @@ impl Router {
         id_pub: &[u8; 32],
         sphinx: X25519Secret,
         service: MailboxService,
+        peers: Arc<Peers>,
         clock: Clock,
     ) -> Self {
         Self {
@@ -113,6 +116,7 @@ impl Router {
             own_addr: node_address(id_pub),
             replay: Mutex::new(SeenCache::new(REPLAY_WINDOW_SECS, REPLAY_MAX_ENTRIES)),
             service: Mutex::new(service),
+            peers,
             inboxes: Arc::new(Inboxes::default()),
             counters: Counters::default(),
             clock,
@@ -151,14 +155,13 @@ impl Router {
                 delay_ms,
                 packet,
             } => {
-                if next_hop != self.own_addr {
-                    // Multi-node forwarding arrives in P5.
+                if next_hop != self.own_addr && !self.peers.is_peer_addr(&next_hop) {
                     return self.drop_packet();
                 }
                 let me = self.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    me.submit(packet);
+                    me.forward(next_hop, packet);
                 });
             }
             Processed::Final {
@@ -185,6 +188,15 @@ impl Router {
         }
     }
 
+    /// Send a packet to the node at `addr` (ourselves included).
+    fn forward(self: &Arc<Self>, addr: [u8; 32], packet: Vec<u8>) {
+        if addr == self.own_addr {
+            self.submit(packet);
+        } else if !self.peers.send(&addr, packet) {
+            self.drop_packet();
+        }
+    }
+
     fn deliver_local(self: &Arc<Self>, payload: &[u8], now: u64) {
         let Ok(plain) = sphinx::open_forward_payload(payload) else {
             return self.drop_packet();
@@ -195,9 +207,8 @@ impl Router {
         let replies = self.service.lock().expect("service").handle(msg, now);
         for r in replies {
             match sphinx::use_surb(&r.surb, &r.message, SizeClass::Small) {
-                // The reply's first hop: ourselves in M1 (other nodes in P5).
-                Ok((packet, first)) if first == self.own_addr => self.submit(packet),
-                _ => self.drop_packet(),
+                Ok((packet, first)) => self.forward(first, packet),
+                Err(_) => self.drop_packet(),
             }
         }
     }
@@ -230,6 +241,7 @@ mod tests {
             &id.public(),
             sk,
             MailboxService::new(&Limits::default()),
+            Arc::new(Peers::none()),
             Arc::new(|| NOW),
         ));
         Fixture { router, hop }

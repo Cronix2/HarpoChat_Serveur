@@ -21,6 +21,8 @@ pub struct Config {
     pub listen: ListenSection,
     /// Root nodes (trust anchors). Empty only on a root node.
     pub roots: Vec<RootConfig>,
+    /// Other nodes this node links to (static until gossip, P7).
+    pub peers: Vec<PeerConfig>,
     /// Memory limits.
     pub limits: Limits,
 }
@@ -74,6 +76,37 @@ pub struct RootConfig {
     pub id_pub: String,
     /// `wss://` endpoints.
     pub endpoints: Vec<String>,
+}
+
+/// `[[peers]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerConfig {
+    /// Ed25519 identity, 64 hex characters.
+    pub id_pub: String,
+    /// `wss://host:port` of the peer.
+    pub endpoint: String,
+}
+
+impl PeerConfig {
+    /// `host:port` part of the endpoint.
+    pub fn host_port(&self) -> Option<String> {
+        let rest = self.endpoint.strip_prefix("wss://")?;
+        let authority = rest.split('/').next()?;
+        if authority.is_empty() {
+            return None;
+        }
+        Some(
+            if authority
+                .rsplit_once(':')
+                .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+            {
+                authority.to_string()
+            } else {
+                format!("{authority}:443")
+            },
+        )
+    }
 }
 
 /// `[limits]`.
@@ -186,6 +219,16 @@ impl Config {
             ));
         }
         check_endpoints("node.public_endpoints", &n.public_endpoints, true)?;
+        for p in &self.peers {
+            decode_id(&p.id_pub)
+                .map_err(|_| invalid("peers", "id_pub doit faire 64 caractères hex"))?;
+            if p.host_port().is_none() {
+                return Err(invalid(
+                    "peers",
+                    format!("`{}` n'est pas une URL wss://hôte:port", p.endpoint),
+                ));
+            }
+        }
         for r in &self.roots {
             decode_id(&r.id_pub)?;
             check_endpoints("roots", &r.endpoints, false)?;
@@ -201,6 +244,20 @@ impl Config {
             ));
         }
         Ok(())
+    }
+
+    /// Decoded peer identities and `host:port` endpoints.
+    pub fn peer_list(&self) -> Result<Vec<([u8; 32], String)>, ConfigError> {
+        self.peers
+            .iter()
+            .map(|p| {
+                let id = decode_id(&p.id_pub)?;
+                let hp = p
+                    .host_port()
+                    .ok_or_else(|| invalid("peers", "endpoint invalide"))?;
+                Ok((id, hp))
+            })
+            .collect()
     }
 
     /// Decoded root identities.
@@ -314,6 +371,31 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn peers_config_validated() {
+        let c = Config::parse(
+            "[[peers]]
+id_pub = \"0101010101010101010101010101010101010101010101010101010101010101\"
+endpoint = \"wss://10.0.0.2:8443\"
+",
+        )
+        .unwrap();
+        assert_eq!(c.validate(), Ok(()));
+        assert_eq!(
+            c.peer_list().unwrap(),
+            vec![([1u8; 32], "10.0.0.2:8443".to_string())]
+        );
+        let mut bad = c.clone();
+        bad.peers[0].endpoint = "http://x".into();
+        assert!(matches!(
+            bad.validate(),
+            Err(ConfigError::Invalid { field: "peers", .. })
+        ));
+        let mut noport = c;
+        noport.peers[0].endpoint = "wss://node.example".into();
+        assert_eq!(noport.peer_list().unwrap()[0].1, "node.example:443");
     }
 
     #[test]

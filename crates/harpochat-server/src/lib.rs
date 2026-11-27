@@ -10,6 +10,7 @@ pub mod config;
 pub mod keystore;
 pub mod net;
 pub mod node;
+pub mod peers;
 pub mod router;
 pub mod server;
 pub mod service;

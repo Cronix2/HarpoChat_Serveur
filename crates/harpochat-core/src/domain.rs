@@ -24,6 +24,8 @@ pub const NOISE_STATIC: &str = "harpochat/v1/noise-static";
 pub const MBX_KEYS: &str = "harpo-mbx-keys";
 /// Hash label for mailbox identifiers.
 pub const MBX_ID: &str = "harpo-mbx-id";
+/// Hash label for mailbox placement (rendezvous hashing, deviation E14).
+pub const MBX_PLACE: &str = "harpo-mbx-place";
 /// Hash label for Sphinx node addresses.
 pub const NODE_ADDR: &str = "harpo-node-addr";
 

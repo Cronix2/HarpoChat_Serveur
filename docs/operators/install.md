@@ -1,8 +1,9 @@
 # Installer un nœud HarpoChat
 
 > **Pour :** les bénévoles qui veulent faire tourner un nœud du mesh HarpoChat.
-> **État :** phase P4. Un nœud seul accepte les téléphones et garde leur courrier en RAM. Le mesh
-> multi-nœuds arrive en phase P5, le parrainage par jeton (`invite-node` / `join`) en phase P7.
+> **État :** phase P5. Les nœuds forment un mesh (pairs déclarés dans `[[peers]]`) et relaient des
+> paquets Sphinx multi-sauts. Le parrainage par jeton (`invite-node` / `join`) et la découverte
+> automatique arrivent en phase P7.
 
 ## Ce que fait (et ne fait pas) un nœud
 
@@ -67,7 +68,16 @@ id_pub = "<64 caractères hexadécimaux>"
 endpoints = ["wss://racine.example:443"]
 ```
 
-(En phase P7, cette étape sera remplacée par un seul copier-coller : `harpochat-server join <jeton>`.)
+Et les autres nœuds du mesh, auxquels ce nœud se connecte pour relayer les paquets :
+
+```toml
+[[peers]]
+id_pub = "<64 caractères hexadécimaux>"
+endpoint = "wss://autre-noeud.example:443"
+```
+
+(En phase P7, ces deux étapes seront remplacées par un seul copier-coller,
+`harpochat-server join <jeton>`, et les pairs seront découverts automatiquement par gossip.)
 
 `init` refuse de s'exécuter sur un répertoire qui contient déjà un nœud : la clé n'est jamais écrasée.
 

@@ -41,7 +41,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## État
 
-Phases **P1** (noyau), **P3** (binaire, releases signées) **P4** (nœud joignable, M1) et **P2** (bindings Android) terminées, en revue : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
+Phases **P1** (noyau), **P3** (binaire, releases signées) **P4** (nœud joignable, M1) **P2** (bindings Android) et **P5** (mesh multi-nœuds, M2) terminées, en revue : noyau `harpochat-core` v0.1. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
 
 ## Licence
 
