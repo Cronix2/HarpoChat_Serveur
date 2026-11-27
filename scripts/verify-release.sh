@@ -7,7 +7,7 @@
 #      x86_64 binary, byte for byte.
 # Needs: git, gh (or curl), cosign, rustup, python3 -m pip install ziglang,
 # cargo install cargo-zigbuild.
-#   scripts/verify-release.sh v0.2.0
+#   scripts/verify-release.sh v0.2.0      # or: latest
 set -euo pipefail
 tag="${1:?usage: verify-release.sh <tag>}"
 repo="${REPO:-Cronix2/HarpoChat_Serveur}"
@@ -20,7 +20,7 @@ for f in SHA256SUMS SHA256SUMS.cosign.bundle; do
   curl -fsSL -o "$f" "https://github.com/$repo/releases/download/$tag/$f"
 done
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity-regexp "^https://github.com/$repo/.github/workflows/release.yml@refs/tags/$tag\$" \
+  --certificate-identity-regexp "^https://github.com/$repo/\.github/workflows/release\.yml@refs/(heads/main|tags/.+)\$" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 echo "== 2. Rebuild from source"

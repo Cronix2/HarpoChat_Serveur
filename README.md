@@ -33,6 +33,13 @@ crates/harpochat-server   binaire du nœud : TLS + WebSocket + Noise, routeur Sp
 
 Installer un nœud : [`docs/operators/install.md`](docs/operators/install.md).
 
+## Télécharger
+
+Les binaires compilés sont sur la page [Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases) :
+**`latest`** est reconstruite automatiquement à chaque modification de `main` (serveur Windows,
+Linux x86_64, Linux ARM, et bibliothèque Android) ; une version numérotée se publie avec le bouton
+*Run workflow* du workflow **Release** (onglet *Actions*).
+
 ## Construire et tester
 
 Prérequis : [Rust](https://rustup.rs) (la version est épinglée dans `rust-toolchain.toml`).
