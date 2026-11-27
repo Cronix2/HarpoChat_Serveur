@@ -7,6 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use harpochat_core::bootstrap::RootEntry;
+use harpochat_core::directory::{Revoke, VERSION as DIR_VERSION};
+use harpochat_core::invite::encode_token;
+use harpochat_core::signed::Signed;
 use harpochat_core::{cbor, descriptor};
 
 use crate::config::{Config, CONFIG_FILE};
@@ -50,6 +53,25 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Crée un jeton de parrainage à usage unique pour un nouveau nœud.
+    InviteNode {
+        /// Durée de validité en heures (48 au plus).
+        #[arg(long, default_value_t = 48)]
+        hours: u64,
+    },
+    /// Rejoint le mesh avec un jeton `hcn1-…` (`-` : lu sur l'entrée standard).
+    Join {
+        /// Le jeton donné par le parrain.
+        token: String,
+        /// Adresse publique `wss://…` du nouveau nœud (répétable).
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
+    },
+    /// Révoque un nœud que ce nœud a parrainé (ou n'importe lequel, depuis une racine).
+    Revoke {
+        /// Identité du nœud (64 caractères hexadécimaux).
+        node_id: String,
+    },
 }
 
 /// Data directory: `--dir`, else `$HARPOCHAT_HOME`, else `./harpochat-data`.
@@ -78,7 +100,106 @@ pub fn run_cli(cli: Cli) -> i32 {
     match cli.cmd {
         Command::Init { root, endpoints } => init(&dir, root, endpoints),
         Command::Run { check } => run(&dir, check),
+        Command::InviteNode { hours } => invite_node(&dir, hours),
+        Command::Join { token, endpoints } => join(&dir, &token, endpoints),
+        Command::Revoke { node_id } => revoke(&dir, &node_id),
     }
+}
+
+fn invite_node(dir: &Path, hours: u64) -> i32 {
+    let node = match load(dir) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    match crate::sponsor::create_invite(&node, now(), hours.saturating_mul(3600)) {
+        Ok(invite) => {
+            // The token is a secret: printed once, never logged.
+            println!("{}", encode_token(&invite));
+            eprintln!(
+                "  ↳ valable {hours} h, utilisable une seule fois. C'est un secret :                  transmettez-le par un canal de confiance."
+            );
+            EXIT_OK
+        }
+        Err(e) => fail(EXIT_USAGE, e),
+    }
+}
+
+fn join(dir: &Path, token: &str, endpoints: Vec<String>) -> i32 {
+    let token = if token == "-" {
+        let mut t = String::new();
+        if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut t) {
+            return fail(EXIT_USAGE, format!("lecture du jeton impossible : {e}"));
+        }
+        t
+    } else {
+        token.to_string()
+    };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => return fail(EXIT_RUNTIME, format!("runtime : {e}")),
+    };
+    match rt.block_on(crate::join::join_mesh(dir, &token, endpoints, now())) {
+        Ok(j) => {
+            println!("✔ clés générées · id: {}", hex::encode(j.id));
+            println!("✔ parrain joint · {}", hex::encode(j.sponsor));
+            println!(
+                "✔ certificat de parrainage reçu (chaîne de {} maillon(s), {} racine(s))",
+                j.chain_len, j.roots
+            );
+            println!(
+                "→ lancez `harpochat-server --dir {} run` : le nœud s'annoncera au mesh",
+                dir.display()
+            );
+            EXIT_OK
+        }
+        Err(e) => {
+            let code = match e {
+                crate::join::JoinError::Token(_)
+                | crate::join::JoinError::Exists
+                | crate::join::JoinError::Config(_) => EXIT_USAGE,
+                _ => EXIT_RUNTIME,
+            };
+            fail(code, e)
+        }
+    }
+}
+
+fn revoke(dir: &Path, node_id: &str) -> i32 {
+    let node = match load(dir) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    let Some(target) = hex::decode(node_id.trim())
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+    else {
+        return fail(EXIT_USAGE, "node_id : 64 caractères hexadécimaux attendus");
+    };
+    let r = Signed::sign(
+        &node.keys.identity,
+        &Revoke {
+            v: DIR_VERSION,
+            node_id: target,
+            sponsor_id: node.keys.identity.public(),
+            revoked_at: now(),
+        },
+    );
+    let mut config = node.config.clone();
+    config.revocations.push(hex::encode(cbor::to_vec(&r)));
+    if let Err(e) = config.save(dir) {
+        return fail(
+            EXIT_RUNTIME,
+            format!("écriture de {CONFIG_FILE} impossible : {e}"),
+        );
+    }
+    println!("révocation de {} enregistrée", &node_id.trim()[..16]);
+    println!(
+        "→ redémarrez le nœud pour la publier ; elle n'est prise en compte que si ce nœud est le          parrain direct du nœud révoqué ou une racine (spec §4.3)"
+    );
+    EXIT_OK
 }
 
 fn init(dir: &Path, root: bool, endpoints: Vec<String>) -> i32 {
@@ -147,8 +268,8 @@ fn init(dir: &Path, root: bool, endpoints: Vec<String>) -> i32 {
         }
     } else {
         println!(
-            "→ ajoutez au moins une racine dans [[roots]] de {CONFIG_FILE} (le parrainage par \
-             jeton `join` arrive en phase P7)"
+            "→ ce nœud doit être parrainé : utilisez plutôt `harpochat-server join <jeton>` sur un \
+             répertoire vide, ou ajoutez à la main [[roots]] et node.chain dans {CONFIG_FILE}"
         );
     }
     EXIT_OK

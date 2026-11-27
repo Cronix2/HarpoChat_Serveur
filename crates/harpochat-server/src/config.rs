@@ -3,7 +3,12 @@
 
 use core::fmt;
 
+use std::path::Path;
+
+use harpochat_core::cbor;
 use harpochat_core::descriptor::{validate_endpoint, Role, MAX_ENDPOINTS, MAX_LAYER};
+use harpochat_core::directory::{Revoke, Vouch, MAX_CHAIN_DEPTH, SPONSOR_LIMIT};
+use harpochat_core::signed::Signed;
 use serde::{Deserialize, Serialize};
 
 /// Configuration file name inside the data directory.
@@ -15,6 +20,9 @@ pub const MAX_BLOB_TTL_SECS: u64 = 7 * 86_400;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
+    /// Revocations signed by this node (hex of CBOR `Signed<Revoke>`),
+    /// published in its directory (`harpochat-server revoke`).
+    pub revocations: Vec<String>,
     /// This node.
     pub node: NodeSection,
     /// Listening socket.
@@ -27,6 +35,40 @@ pub struct Config {
     pub limits: Limits,
     /// Cover traffic (spec §5, §6.3).
     pub cover: Cover,
+    /// Nodes this node sponsored (written by the node itself).
+    pub sponsor: SponsorSection,
+}
+
+/// `[sponsor]`: this node as a sponsor (spec §4.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SponsorSection {
+    /// Nodes this node may vouch for per 30 days (at most 3, the limit every
+    /// verifier enforces).
+    pub limit: u8,
+    /// Nodes vouched for, and the invites they used (never reusable).
+    pub vouched: Vec<Vouched>,
+}
+
+impl Default for SponsorSection {
+    fn default() -> Self {
+        Self {
+            limit: SPONSOR_LIMIT as u8,
+            vouched: Vec::new(),
+        }
+    }
+}
+
+/// `[[sponsor.vouched]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Vouched {
+    /// Vouched node, 64 hex characters.
+    pub node_id: String,
+    /// Hash of the invite it used, 64 hex characters.
+    pub invite: String,
+    /// Vouch time, unix seconds.
+    pub issued: u64,
 }
 
 /// Highest configurable rate (frames or packets per second).
@@ -125,6 +167,9 @@ pub struct NodeSection {
     pub public_endpoints: Vec<String>,
     /// Whether this node is a root of the mesh.
     pub root: bool,
+    /// Sponsorship chain from this node up to a root, hex of CBOR
+    /// `Signed<Vouch>`, this node's vouch first (written by `join`).
+    pub chain: Vec<String>,
 }
 
 impl Default for NodeSection {
@@ -134,6 +179,7 @@ impl Default for NodeSection {
             layer: 0,
             public_endpoints: Vec::new(),
             root: false,
+            chain: Vec::new(),
         }
     }
 }
@@ -174,24 +220,29 @@ pub struct PeerConfig {
     pub endpoint: String,
 }
 
+/// `host:port` of a `wss://` endpoint (port 443 by default).
+pub fn host_port(endpoint: &str) -> Option<String> {
+    let rest = endpoint.strip_prefix("wss://")?;
+    let authority = rest.split('/').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some(
+        if authority
+            .rsplit_once(':')
+            .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+        {
+            authority.to_string()
+        } else {
+            format!("{authority}:443")
+        },
+    )
+}
+
 impl PeerConfig {
     /// `host:port` part of the endpoint.
     pub fn host_port(&self) -> Option<String> {
-        let rest = self.endpoint.strip_prefix("wss://")?;
-        let authority = rest.split('/').next()?;
-        if authority.is_empty() {
-            return None;
-        }
-        Some(
-            if authority
-                .rsplit_once(':')
-                .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
-            {
-                authority.to_string()
-            } else {
-                format!("{authority}:443")
-            },
-        )
+        host_port(&self.endpoint)
     }
 }
 
@@ -270,6 +321,19 @@ fn check_endpoints(
     Ok(())
 }
 
+fn decode_signed<T>(field: &'static str, hex_value: &str) -> Result<Signed<T>, ConfigError>
+where
+    T: harpochat_core::signed::SignedPayload + serde::de::DeserializeOwned + Serialize,
+{
+    let bytes = hex::decode(hex_value).map_err(|_| invalid(field, "hexadécimal attendu"))?;
+    let signed: Signed<T> =
+        cbor::from_slice(&bytes, 4096).map_err(|_| invalid(field, "objet CBOR invalide"))?;
+    signed
+        .verify()
+        .map_err(|_| invalid(field, "signature invalide"))?;
+    Ok(signed)
+}
+
 fn decode_id(hex_id: &str) -> Result<[u8; 32], ConfigError> {
     let bytes =
         hex::decode(hex_id).map_err(|_| invalid("roots", "id_pub doit être en hexadécimal"))?;
@@ -329,7 +393,48 @@ impl Config {
                 "entre 1 s et 7 jours (spec §7.3)",
             ));
         }
-        self.cover.validate()
+        self.cover.validate()?;
+        if self.node.chain.len() > MAX_CHAIN_DEPTH {
+            return Err(invalid("node.chain", "chaîne de parrainage trop longue"));
+        }
+        self.chain()?;
+        self.revocation_list()?;
+        if self.sponsor.limit == 0 || usize::from(self.sponsor.limit) > SPONSOR_LIMIT {
+            return Err(invalid(
+                "sponsor.limit",
+                format!("entre 1 et {SPONSOR_LIMIT} (spec §4.3)"),
+            ));
+        }
+        for v in &self.sponsor.vouched {
+            decode_id(&v.node_id).map_err(|_| invalid("sponsor.vouched", "node_id invalide"))?;
+            decode_id(&v.invite).map_err(|_| invalid("sponsor.vouched", "invite invalide"))?;
+        }
+        Ok(())
+    }
+
+    /// This node's sponsorship chain, decoded and signature-checked.
+    pub fn chain(&self) -> Result<Vec<Signed<Vouch>>, ConfigError> {
+        self.node
+            .chain
+            .iter()
+            .map(|h| decode_signed("node.chain", h))
+            .collect()
+    }
+
+    /// Revocations this node publishes, decoded and signature-checked.
+    pub fn revocation_list(&self) -> Result<Vec<Signed<Revoke>>, ConfigError> {
+        self.revocations
+            .iter()
+            .map(|h| decode_signed("revocations", h))
+            .collect()
+    }
+
+    /// Write `harpochat-server.toml` in `dir` atomically (temporary file,
+    /// then rename): a crash never leaves a truncated configuration.
+    pub fn save(&self, dir: &Path) -> std::io::Result<()> {
+        let tmp = dir.join(format!("{CONFIG_FILE}.tmp"));
+        std::fs::write(&tmp, self.to_toml())?;
+        std::fs::rename(&tmp, dir.join(CONFIG_FILE))
     }
 
     /// Decoded peer identities and `host:port` endpoints.
@@ -416,6 +521,59 @@ mean_delay_ms = 600000
         let mut off = Config::default();
         off.cover = Cover::off();
         assert_eq!(off.validate(), Ok(()));
+    }
+
+    fn signed_vouch_hex() -> String {
+        let k = harpochat_core::keys::SigningKey::from_seed(&[4; 32]);
+        hex::encode(cbor::to_vec(&Signed::sign(
+            &k,
+            &Vouch {
+                v: 1,
+                node_id: [9; 32],
+                sponsor_id: k.public(),
+                issued: 1,
+            },
+        )))
+    }
+
+    #[test]
+    fn chain_and_revocations_validated() {
+        let mut c = Config::default();
+        c.node.chain = vec![signed_vouch_hex()];
+        assert_eq!(c.validate(), Ok(()));
+        assert_eq!(c.chain().unwrap().len(), 1);
+        let mut bad = c.clone();
+        bad.node.chain = vec!["zz".into()];
+        assert!(bad.validate().is_err());
+        let mut tampered = c.clone();
+        let mut bytes = hex::decode(&c.node.chain[0]).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        tampered.node.chain = vec![hex::encode(bytes)];
+        assert!(tampered.validate().is_err());
+        let mut wrong_kind = c.clone();
+        wrong_kind.revocations = vec![signed_vouch_hex()];
+        assert!(wrong_kind.validate().is_err());
+        let mut limit = Config::default();
+        limit.sponsor.limit = 4;
+        assert!(limit.validate().is_err());
+    }
+
+    #[test]
+    fn save_is_atomic_and_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Config::default();
+        c.node.chain = vec![signed_vouch_hex()];
+        c.sponsor.vouched.push(Vouched {
+            node_id: "ab".repeat(32),
+            invite: "cd".repeat(32),
+            issued: 5,
+        });
+        c.save(tmp.path()).unwrap();
+        c.save(tmp.path()).unwrap(); // replaces the existing file
+        let text = std::fs::read_to_string(tmp.path().join(CONFIG_FILE)).unwrap();
+        assert_eq!(Config::parse(&text), Ok(c));
+        assert!(!tmp.path().join(format!("{CONFIG_FILE}.tmp")).exists());
     }
 
     #[test]

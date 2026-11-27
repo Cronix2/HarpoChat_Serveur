@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Accept loop and per-link dispatch.
 //!
-//! A link whose peer proved the identity of a configured `[[peers]]` node is
-//! a **node link** (Sphinx, directory and padding only). Any other link is a
-//! **phone link** (inbox registration, Sphinx, directory, cover rate).
+//! A link whose peer proved the identity of one of this node's peers (a
+//! configured or verified mesh node) is a **node link** (Sphinx, directory
+//! and padding only). Any other link is a **phone link** (inbox registration,
+//! Sphinx, directory, cover rate) — or a new node presenting a `JoinRequest`.
 //!
 //! What a node sends to a phone is shaped (`cover::Shaper`) at the phone's
 //! chosen rate, bounded by `[cover] phone_link_rate_min/max`.
@@ -11,24 +12,27 @@
 //! No log line mentions a client address, an inbox token or a packet: only
 //! startup, shutdown and aggregated counters (spec §10).
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use harpochat_core::directory::{Directory, DirectoryEntry, VERSION as DIR_VERSION};
+use harpochat_core::directory::Directory;
 use harpochat_core::link::{parse_cover_rate, FrameKind, LinkFrame, SizeClass};
 use harpochat_core::signed::Signed;
 use harpochat_core::{cbor, directory, CoreError};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use crate::config::Cover;
+use crate::config::{host_port, Cover};
 use crate::cover::{self, frame_or_padding, os_uniform, Rate, Shaper};
+use crate::membership::{Changes, Membership};
 use crate::net::{self, NetError, RateLimit};
 use crate::node::Node;
 use crate::peers::Peers;
 use crate::router::{Clock, Router};
 use crate::service::MailboxService;
+use crate::sponsor::Sponsor;
 
 /// Frames queued per link before a slow phone starts losing deliveries.
 const LINK_QUEUE: usize = 256;
@@ -42,6 +46,10 @@ const NODE_BURST: u32 = 8_000;
 /// Backlog drained at once on an overloaded phone link (e.g. a FETCH
 /// answered through many SURBs).
 const PHONE_BURST: usize = 16;
+/// Directories received from peers awaiting merge.
+const GOSSIP_QUEUE: usize = 256;
+/// Re-verification of the view (descriptor expiry).
+const REFRESH_EVERY: Duration = Duration::from_secs(30);
 
 fn class_for(frame: &LinkFrame) -> SizeClass {
     if frame.body.len() <= SizeClass::Small.max_body_len() {
@@ -51,33 +59,37 @@ fn class_for(frame: &LinkFrame) -> SizeClass {
     }
 }
 
-/// Signed directory as seen by this node: itself (if it is a root) and the
-/// self-signed descriptors of its peers. Until gossip and sponsorship (P7),
-/// chains are empty, so clients only accept entries of nodes that are roots.
-pub fn own_directory(node: &Node, peers: &Peers, now: u64) -> Signed<Directory> {
-    let mut entries = Vec::new();
-    if node.config.node.root {
-        entries.push(DirectoryEntry {
-            descriptor: node.descriptor(now),
-            chain: Vec::new(),
-        });
+/// The configured peers and roots this node always links to.
+fn initial_peers(node: &Node) -> Result<Vec<([u8; 32], String)>, NetError> {
+    let mut list = node
+        .config
+        .peer_list()
+        .map_err(|_| NetError::Protocol(CoreError::Malformed))?;
+    let root_ids = node
+        .config
+        .root_ids()
+        .map_err(|_| NetError::Protocol(CoreError::Malformed))?;
+    for (id, r) in root_ids.into_iter().zip(&node.config.roots) {
+        if let Some(hp) = r.endpoints.iter().find_map(|e| host_port(e)) {
+            list.push((id, hp));
+        }
     }
-    for d in peers.descriptors() {
-        entries.push(DirectoryEntry {
-            descriptor: d,
-            chain: Vec::new(),
-        });
+    Ok(list)
+}
+
+/// Link to new verified nodes, unlink from those no longer valid (but keep
+/// the configured ones).
+fn apply(peers: &Peers, statics: &HashSet<[u8; 32]>, changes: Changes) {
+    for (id, hp) in changes.added {
+        if let Some(hp) = hp {
+            peers.add(id, hp);
+        }
     }
-    Signed::sign(
-        &node.keys.identity,
-        &Directory {
-            v: DIR_VERSION,
-            issuer: node.keys.identity.public(),
-            issued: now,
-            entries,
-            revocations: Vec::new(),
-        },
-    )
+    for id in changes.removed {
+        if !statics.contains(&id) {
+            peers.remove(&id);
+        }
+    }
 }
 
 /// A node ready to accept links.
@@ -85,22 +97,29 @@ pub struct Server {
     node: Arc<Node>,
     router: Arc<Router>,
     peers: Arc<Peers>,
+    membership: Arc<Membership>,
+    sponsor: Arc<Sponsor>,
+    statics: Arc<HashSet<[u8; 32]>>,
     inbound: Option<mpsc::Receiver<Vec<u8>>>,
+    gossip: Option<mpsc::Receiver<Vec<u8>>>,
 }
 
 impl Server {
     /// Build the node's router and start its peer links. Needs a tokio runtime.
     pub fn new(node: Node, clock: Clock) -> Result<Self, NetError> {
         let (tx, rx) = mpsc::channel(INBOUND_QUEUE);
-        let peer_list = node
-            .config
-            .peer_list()
-            .map_err(|_| NetError::Protocol(CoreError::Malformed))?;
-        let peers = Arc::new(if peer_list.is_empty() {
-            Peers::none()
-        } else {
-            Peers::start(&node.keys, peer_list, tx, node.config.cover.node_link_rate)
-        });
+        let (gtx, grx) = mpsc::channel(GOSSIP_QUEUE);
+        let peers = Arc::new(Peers::new(
+            &node.keys,
+            tx,
+            gtx,
+            node.config.cover.node_link_rate,
+        ));
+        let initial = initial_peers(&node)?;
+        let statics: HashSet<[u8; 32]> = initial.iter().map(|(id, _)| *id).collect();
+        for (id, hp) in initial {
+            peers.add(id, hp);
+        }
         let router = Arc::new(Router::new(
             &node.keys.identity.public(),
             node.sphinx.clone(),
@@ -109,16 +128,30 @@ impl Server {
             clock,
         ));
         Ok(Self {
+            membership: Arc::new(Membership::new(&node)),
+            sponsor: Arc::new(Sponsor::new(&node)),
             node: Arc::new(node),
             router,
             peers,
+            statics: Arc::new(statics),
             inbound: Some(rx),
+            gossip: Some(grx),
         })
     }
 
     /// The routing core (counters, inboxes) — for tests and `status`.
     pub fn router(&self) -> Arc<Router> {
         self.router.clone()
+    }
+
+    /// The node's view of the mesh — for tests and `status`.
+    pub fn membership(&self) -> Arc<Membership> {
+        self.membership.clone()
+    }
+
+    /// The peer table — for tests.
+    pub fn peers(&self) -> Arc<Peers> {
+        self.peers.clone()
     }
 
     /// Accept links until `shutdown` resolves; all state is then dropped.
@@ -148,10 +181,34 @@ impl Server {
                 }
             }));
         }
+        if let Some(mut grx) = self.gossip.take() {
+            let (membership, peers, statics, router) = (
+                self.membership.clone(),
+                self.peers.clone(),
+                self.statics.clone(),
+                self.router.clone(),
+            );
+            background.push(tokio::spawn(async move {
+                let mut refresh = tokio::time::interval(REFRESH_EVERY);
+                loop {
+                    let changes = tokio::select! {
+                        body = grx.recv() => {
+                            let Some(body) = body else { return };
+                            match cbor::from_slice::<Signed<Directory>>(&body, 1 << 20) {
+                                Ok(d) => membership.merge(&d, router.now()),
+                                Err(_) => continue,
+                            }
+                        }
+                        _ = refresh.tick() => membership.refresh(router.now()),
+                    };
+                    apply(&peers, &statics, changes);
+                }
+            }));
+        }
         background.push(tokio::spawn(cover::node_cover(
             self.node.clone(),
             self.router.clone(),
-            self.peers.clone(),
+            self.membership.clone(),
         )));
         let mut links = tokio::task::JoinSet::new();
         tokio::pin!(shutdown);
@@ -163,10 +220,17 @@ impl Server {
                 accepted = listener.accept() => {
                     let Ok((tcp, _addr)) = accepted else { continue };
                     let _ = tcp.set_nodelay(true);
-                    let (tls, node, router, peers) =
-                        (tls.clone(), self.node.clone(), self.router.clone(), self.peers.clone());
+                    let ctx = LinkCtx {
+                        node: self.node.clone(),
+                        router: self.router.clone(),
+                        peers: self.peers.clone(),
+                        membership: self.membership.clone(),
+                        sponsor: self.sponsor.clone(),
+                        statics: self.statics.clone(),
+                    };
+                    let tls = tls.clone();
                     links.spawn(async move {
-                        if let Err(e) = handle_link(tcp, tls, node, router, peers).await {
+                        if let Err(e) = handle_link(tcp, tls, ctx).await {
                             tracing::debug!("lien fermé : {e}");
                         }
                     });
@@ -182,13 +246,29 @@ impl Server {
     }
 }
 
-async fn handle_link(
-    tcp: tokio::net::TcpStream,
-    tls: tokio_rustls::TlsAcceptor,
+/// What a link handler needs from its node.
+struct LinkCtx {
     node: Arc<Node>,
     router: Arc<Router>,
     peers: Arc<Peers>,
+    membership: Arc<Membership>,
+    sponsor: Arc<Sponsor>,
+    statics: Arc<HashSet<[u8; 32]>>,
+}
+
+async fn handle_link(
+    tcp: tokio::net::TcpStream,
+    tls: tokio_rustls::TlsAcceptor,
+    ctx: LinkCtx,
 ) -> Result<(), NetError> {
+    let LinkCtx {
+        node,
+        router,
+        peers,
+        membership,
+        sponsor,
+        statics,
+    } = ctx;
     let (mut reader, mut writer, peer) =
         net::accept(tcp, &tls, &node.keys.noise, &node.keys.identity).await?;
     let is_node = peer.node_id.is_some_and(|id| peers.is_peer(&id));
@@ -255,13 +335,25 @@ async fn handle_link(
                 rate.set_hz(hz.clamp(cfg.phone_link_rate_min, cfg.phone_link_rate_max));
             }
             FrameKind::DirectoryReq => {
-                let dir = own_directory(&node, &peers, router.now());
+                let dir = membership.directory(&node, router.now());
                 let _ = tx.try_send(LinkFrame {
                     kind: FrameKind::Directory,
                     body: cbor::to_vec(&dir),
                 });
             }
-            // Link padding, and kinds handled in later phases (gossip, join).
+            FrameKind::JoinRequest if !is_node => {
+                let now = router.now();
+                let (resp, entry) = sponsor.handle_join(&node, &frame.body, peer.node_id, now);
+                if let Some(entry) = entry {
+                    apply(&peers, &statics, membership.insert(entry, now));
+                    tracing::info!("nouveau nœud parrainé");
+                }
+                let _ = tx.try_send(LinkFrame {
+                    kind: FrameKind::JoinResponse,
+                    body: cbor::to_vec(&resp),
+                });
+            }
+            // Link padding; gossip is a pull (DirectoryReq).
             _ => {}
         }
     };
@@ -288,9 +380,13 @@ pub async fn serve(
 /// Verify our own directory the way a client would (used by `run --check`).
 pub fn self_check(node: &Node, now: u64) -> bool {
     let roots = node.trusted_roots().unwrap_or_default();
-    let dir = own_directory(node, &Peers::none(), now);
+    let dir = Membership::new(node).directory(node, now);
     match directory::verify_directory(&dir, &roots, now) {
-        Ok(nodes) => !node.config.node.root || nodes.len() == 1,
+        Ok(nodes) => {
+            // A root, or a sponsored node, must appear in its own directory.
+            let member_expected = node.config.node.root || !node.chain().is_empty();
+            !member_expected || nodes.len() == 1
+        }
         Err(_) => false,
     }
 }

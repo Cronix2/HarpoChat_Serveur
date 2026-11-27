@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A loaded node: configuration, long-term keys, and the in-RAM Sphinx key.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use harpochat_core::descriptor::{NodeDescriptor, VERSION};
+use harpochat_core::directory::{verify_entry, DirectoryEntry, Revoke, Vouch};
 use harpochat_core::keys::X25519Secret;
 use harpochat_core::signed::Signed;
 
@@ -49,6 +50,11 @@ pub struct Node {
     pub sphinx: X25519Secret,
     /// Rotation counter of the Sphinx key.
     pub sphinx_epoch: u32,
+    /// Data directory, when loaded from disk (the node then persists its
+    /// sponsorship records there).
+    pub dir: Option<PathBuf>,
+    chain: Vec<Signed<Vouch>>,
+    revocations: Vec<Signed<Revoke>>,
 }
 
 impl Node {
@@ -61,11 +67,16 @@ impl Node {
                 reason: "un nœud non racine doit connaître au moins une racine".into(),
             }));
         }
+        let chain = config.chain().map_err(NodeError::Config)?;
+        let revocations = config.revocation_list().map_err(NodeError::Config)?;
         Ok(Self {
             config,
             keys,
             sphinx: X25519Secret::generate(),
             sphinx_epoch: u32::try_from(now_unix_secs / SPHINX_KEY_PERIOD_SECS).unwrap_or(u32::MAX),
+            dir: None,
+            chain,
+            revocations,
         })
     }
 
@@ -74,7 +85,39 @@ impl Node {
         let keys = keystore::load(dir).map_err(NodeError::Keys)?;
         let text = std::fs::read_to_string(dir.join(CONFIG_FILE)).map_err(NodeError::Io)?;
         let config = Config::parse(&text).map_err(NodeError::Config)?;
-        Self::new(config, keys, now_unix_secs)
+        let mut node = Self::new(config, keys, now_unix_secs)?;
+        node.dir = Some(dir.to_path_buf());
+        Ok(node)
+    }
+
+    /// This node's sponsorship chain (empty on a root).
+    pub fn chain(&self) -> &[Signed<Vouch>] {
+        &self.chain
+    }
+
+    /// Revocations this node signed.
+    pub fn revocations(&self) -> &[Signed<Revoke>] {
+        &self.revocations
+    }
+
+    /// This node's directory entry: fresh descriptor and its chain.
+    pub fn own_entry(&self, now_unix_secs: u64) -> DirectoryEntry {
+        DirectoryEntry {
+            descriptor: self.descriptor(now_unix_secs),
+            chain: self.chain.clone(),
+        }
+    }
+
+    /// Whether clients would accept this node: a root, or a chain that
+    /// verifies up to one of the trusted roots.
+    pub fn is_member(&self, now_unix_secs: u64) -> bool {
+        let roots = self.trusted_roots().unwrap_or_default();
+        let revs: Vec<Revoke> = self
+            .revocations
+            .iter()
+            .filter_map(|r| r.peek().ok())
+            .collect();
+        verify_entry(&self.own_entry(now_unix_secs), &roots, &revs, now_unix_secs).is_ok()
     }
 
     /// Root identities this node trusts (itself included when it is a root).
@@ -150,6 +193,34 @@ mod tests {
         assert_eq!(n.trusted_roots().unwrap(), vec![n.keys.identity.public()]);
         let n = node(true, true).unwrap();
         assert_eq!(n.trusted_roots().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn non_root_member_needs_chain_to_roots() {
+        use harpochat_core::keys::SigningKey;
+        let root = SigningKey::from_seed(&[1; 32]);
+        let keys = NodeKeys::generate();
+        let mut config = Config::default();
+        config.node.public_endpoints = vec!["wss://n.example".into()];
+        config.roots = vec![crate::config::RootConfig {
+            id_pub: hex::encode(root.public()),
+            endpoints: vec!["wss://r.example".into()],
+        }];
+        let n = Node::new(config.clone(), keys.clone(), NOW).unwrap();
+        assert!(!n.is_member(NOW));
+        let vouch = Signed::sign(
+            &root,
+            &Vouch {
+                v: 1,
+                node_id: keys.identity.public(),
+                sponsor_id: root.public(),
+                issued: NOW - 10,
+            },
+        );
+        config.node.chain = vec![hex::encode(harpochat_core::cbor::to_vec(&vouch))];
+        let n = Node::new(config, keys, NOW).unwrap();
+        assert!(n.is_member(NOW));
+        assert!(node(true, false).unwrap().is_member(NOW));
     }
 
     #[test]

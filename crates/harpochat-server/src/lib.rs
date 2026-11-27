@@ -8,11 +8,14 @@
 pub mod cli;
 pub mod config;
 pub mod cover;
+pub mod join;
 pub mod keystore;
+pub mod membership;
 pub mod net;
 pub mod node;
 pub mod peers;
 pub mod router;
 pub mod server;
 pub mod service;
+pub mod sponsor;
 pub mod store;

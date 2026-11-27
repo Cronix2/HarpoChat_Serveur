@@ -17,16 +17,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use harpochat_core::descriptor::{node_address, NodeDescriptor};
+use harpochat_core::descriptor::node_address;
 use harpochat_core::envelope::{self, Message};
 use harpochat_core::keys::random_bytes;
 use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
-use harpochat_core::path::{self, ipv4_16_of, Candidate};
-use harpochat_core::sphinx::{self, Hop, LOCAL_DELIVERY};
+use harpochat_core::path::{self, Candidate};
+use harpochat_core::sphinx::{self, LOCAL_DELIVERY};
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
+use crate::membership::Membership;
 use crate::node::Node;
-use crate::peers::Peers;
 use crate::router::Router;
 
 /// Longest wait between two slots, whatever the rate.
@@ -255,22 +255,12 @@ impl LoopTracker {
 /// Extra time a loop is given beyond its mix delays before it counts as lost.
 pub const LOOP_GRACE: Duration = Duration::from_secs(10);
 
-fn candidate(d: &NodeDescriptor) -> Candidate {
-    Candidate {
-        hop: Hop::from(d),
-        roles: d.roles.clone(),
-        layer: d.layer,
-        sponsor: None,
-        ipv4_16: d.endpoints.iter().find_map(|e| ipv4_16_of(e)),
-    }
-}
-
-/// This node's view for its own cover routes: itself and its peers.
-fn candidates(node: &Node, peers: &Peers, now: u64) -> Vec<Candidate> {
-    std::iter::once(node.descriptor(now))
-        .chain(peers.descriptors())
-        .filter_map(|d| d.verify().ok())
-        .map(|d| candidate(&d))
+/// This node's view for its own cover routes: the verified mesh.
+fn candidates(node: &Node, membership: &Membership, now: u64) -> Vec<Candidate> {
+    membership
+        .nodes(node, now)
+        .iter()
+        .map(Candidate::from)
         .collect()
 }
 
@@ -361,7 +351,7 @@ fn emit_drop(
 
 /// The node's own cover traffic: loops and drops as a Poisson process of
 /// rate `loop_rate + drop_rate`, plus loss accounting. Runs until aborted.
-pub async fn node_cover(node: Arc<Node>, router: Arc<Router>, peers: Arc<Peers>) {
+pub async fn node_cover(node: Arc<Node>, router: Arc<Router>, membership: Arc<Membership>) {
     let cfg = node.config.cover.clone();
     let total = cfg.loop_rate + cfg.drop_rate;
     if total <= 0.0 {
@@ -374,7 +364,7 @@ pub async fn node_cover(node: Arc<Node>, router: Arc<Router>, peers: Arc<Peers>)
         // tick keeps the emission a Poisson process.
         tokio::select! {
             _ = tokio::time::sleep(slot_wait(total, os_uniform())) => {
-                let cands = candidates(&node, &peers, router.now());
+                let cands = candidates(&node, &membership, router.now());
                 if cands.len() < 2 {
                     continue;
                 }
