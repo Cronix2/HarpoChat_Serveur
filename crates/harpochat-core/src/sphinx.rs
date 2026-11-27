@@ -169,14 +169,46 @@ pub fn build_forward(
     class: SizeClass,
     initial_secret: Option<[u8; 32]>,
 ) -> Result<Vec<u8>> {
+    build(
+        message,
+        route,
+        destination,
+        [0; SURB_ID_LEN],
+        delays_ms,
+        class,
+        initial_secret,
+    )
+}
+
+/// Like [`build_forward`], with a 16-byte identifier handed to the final
+/// node with the payload. A phone's own loops use it: route
+/// `gateway → … → gateway`, destination its inbox token; the gateway then
+/// delivers `id ‖ payload` (`Deliver`), and the phone recognises the id.
+pub fn build_forward_tagged(
+    message: &[u8],
+    route: &[Hop],
+    destination: [u8; 32],
+    id: [u8; 16],
+    delays_ms: &[u64],
+    class: SizeClass,
+) -> Result<Vec<u8>> {
+    build(message, route, destination, id, delays_ms, class, None)
+}
+
+fn build(
+    message: &[u8],
+    route: &[Hop],
+    destination: [u8; 32],
+    id: [u8; SURB_ID_LEN],
+    delays_ms: &[u64],
+    class: SizeClass,
+    initial_secret: Option<[u8; 32]>,
+) -> Result<Vec<u8>> {
     check_route(route, delays_ms)?;
     if message.len() > max_message_len(class) {
         return Err(CoreError::TooLarge);
     }
-    let dest = Destination::new(
-        DestinationAddressBytes::from_bytes(destination),
-        [0; SURB_ID_LEN],
-    );
+    let dest = Destination::new(DestinationAddressBytes::from_bytes(destination), id);
     let secret = initial_secret.map(x25519_dalek::StaticSecret::from);
     let mut builder = SphinxPacketBuilder::new().with_payload_size(payload_len(class));
     if let Some(s) = secret.as_ref() {

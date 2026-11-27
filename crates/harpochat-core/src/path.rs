@@ -277,6 +277,55 @@ pub fn loop_route(
     Ok(Route { hops, delays_ms })
 }
 
+/// Loop of a phone (spec §6.3): `gateway → mix… → gateway`, plus one more
+/// node before returning when the mesh is small (`gateway → mix → other →
+/// gateway`), so that it crosses as many nodes as a real exchange. The
+/// gateway hops do not delay. Build it with `sphinx::build_forward_tagged`
+/// to the phone's inbox token.
+pub fn phone_loop_route(
+    nodes: &[Candidate],
+    gateway: &[u8; 32],
+    pick: &mut dyn FnMut(usize) -> usize,
+    uniform: &mut dyn FnMut() -> f64,
+    mean_ms: u64,
+) -> Result<Route> {
+    let gw = find(nodes, gateway)?;
+    if nodes.len() < 2 {
+        return Err(CoreError::Malformed);
+    }
+    let mut hops = vec![gw.hop];
+    let mut delays_ms = vec![0];
+    if nodes.len() == 2 {
+        let other = nodes
+            .iter()
+            .find(|c| c.hop.id_pub != *gateway)
+            .expect("2 nodes");
+        hops.push(other.hop);
+        delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+    } else {
+        let count = mix_count(nodes);
+        let mixes = pick_mixes(nodes, &[gw], count, pick)?;
+        for m in &mixes {
+            hops.push(m.hop);
+            delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+        }
+        if count == 1 {
+            let rest: Vec<&Candidate> = nodes
+                .iter()
+                .filter(|c| {
+                    c.hop.id_pub != *gateway && mixes.iter().all(|m| m.hop.id_pub != c.hop.id_pub)
+                })
+                .collect();
+            let other = rest[pick(rest.len()) % rest.len()];
+            hops.push(other.hop);
+            delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+        }
+    }
+    hops.push(gw.hop);
+    delays_ms.push(0);
+    Ok(Route { hops, delays_ms })
+}
+
 /// Drop emitted by node `own` (spec §6.3): `mix… → mailbox`, never `own`.
 /// `avoid` (e.g. suspect nodes) is skipped while other choices exist.
 pub fn drop_route(
@@ -665,5 +714,33 @@ mod tests {
             .unwrap();
             assert_eq!(*ids(&r).last().unwrap(), 4);
         }
+    }
+
+    #[test]
+    fn phone_loop_route_shapes() {
+        let mut p = Rng(4);
+        let mut u = Rng(5);
+        let mut go = |n: u8| {
+            phone_loop_route(
+                &mesh(n),
+                &[1; 32],
+                &mut |k| p.pick(k),
+                &mut || u.uniform(),
+                DEFAULT_MEAN_DELAY_MS,
+            )
+        };
+        assert_eq!(go(1).err(), Some(CoreError::Malformed));
+        assert_eq!(ids(&go(2).unwrap()), vec![1, 2, 1]);
+        for _ in 0..50 {
+            let r = go(5).unwrap();
+            let v = ids(&r);
+            assert_eq!(v.len(), 4);
+            assert_eq!((v[0], v[3]), (1, 1));
+            assert!(v[1] != 1 && v[2] != 1 && v[1] != v[2]);
+            assert_eq!((r.delays_ms[0], r.delays_ms[3]), (0, 0));
+        }
+        let big = go(12).unwrap();
+        assert_eq!(big.hops.len(), 5);
+        assert!(big.hops.len() <= crate::sphinx::MAX_HOPS);
     }
 }

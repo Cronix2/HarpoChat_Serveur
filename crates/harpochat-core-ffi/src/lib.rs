@@ -474,6 +474,26 @@ pub fn build_forward(
     )?)
 }
 
+/// A phone loop packet (cover traffic that measures losses, spec §6.3):
+/// `LOOP` along `route` (from `phone_loop_route`) back to `inbox`. It comes
+/// back as a `Deliver` frame whose first 16 bytes are `loop_id`.
+#[uniffi::export]
+pub fn build_loop_packet(
+    route: Vec<FfiHop>,
+    inbox: Vec<u8>,
+    loop_id: Vec<u8>,
+    delays_ms: Vec<u64>,
+) -> FfiResult<Vec<u8>> {
+    Ok(sphinx::build_forward_tagged(
+        &envelope::encode(&Message::Loop),
+        &hops(&route)?,
+        fixed(&inbox)?,
+        fixed(&loop_id)?,
+        &delays_ms,
+        SizeClass::Small,
+    )?)
+}
+
 /// A SURB and the recovery material its creator keeps (in RAM only).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiSurb {
@@ -910,6 +930,23 @@ pub fn reply_route(
         &c,
         &fixed(&gateway)?,
         &fixed(&mailbox)?,
+        &mut os_pick,
+        &mut os_uniform,
+        mean_delay_ms,
+    )?))
+}
+
+/// Route of a phone loop: `gateway → mix… → gateway` (see `build_loop_packet`).
+#[uniffi::export]
+pub fn phone_loop_route(
+    nodes: Vec<FfiNode>,
+    gateway: Vec<u8>,
+    mean_delay_ms: u64,
+) -> FfiResult<FfiRoute> {
+    let c = candidates(&nodes)?;
+    Ok(to_ffi_route(harpochat_core::path::phone_loop_route(
+        &c,
+        &fixed(&gateway)?,
         &mut os_pick,
         &mut os_uniform,
         mean_delay_ms,

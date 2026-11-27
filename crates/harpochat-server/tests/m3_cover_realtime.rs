@@ -252,3 +252,51 @@ async fn dead_peer_becomes_suspect() {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_loop_comes_back_across_the_mesh() {
+    let mesh = start_mesh(5, fast_cover()).await;
+    let roots: Vec<[u8; 32]> = mesh.iter().map(|m| m.id).collect();
+    let nodes = directory(&mesh[2], &roots, 5).await;
+    let cands: Vec<Candidate> = nodes.iter().map(Candidate::from).collect();
+    let gw = mesh[2].id;
+    let mut phone = Client::connect(mesh[2].addr, hop_of(&cands, &gw))
+        .await
+        .unwrap();
+    let route = path::phone_loop_route(
+        &cands,
+        &gw,
+        &mut |n| (u64::from_le_bytes(random_bytes()) % n as u64) as usize,
+        &mut || 0.5,
+        50,
+    )
+    .unwrap();
+    assert_eq!(route.hops.len(), 4);
+    let loop_id: [u8; 16] = random_bytes();
+    let pkt = sphinx::build_forward_tagged(
+        &envelope::encode(&Message::Loop),
+        &route.hops,
+        phone.inbox,
+        loop_id,
+        &route.delays_ms,
+        SizeClass::Small,
+    )
+    .unwrap();
+    phone
+        .writer
+        .send(
+            &LinkFrame {
+                kind: FrameKind::Sphinx,
+                body: pkt,
+            },
+            SizeClass::Small,
+        )
+        .await
+        .unwrap();
+    let (id, payload) = next_deliver(&mut phone, Duration::from_secs(5))
+        .await
+        .expect("loop back");
+    assert_eq!(id, loop_id);
+    let plain = sphinx::open_forward_payload(&payload).unwrap();
+    assert_eq!(envelope::decode(&plain).unwrap(), Message::Loop);
+}
