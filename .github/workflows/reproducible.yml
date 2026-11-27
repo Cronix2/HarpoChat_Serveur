@@ -1,0 +1,41 @@
+name: Reproducible build
+
+# Builds the Linux x86_64 release binary twice, from two checkouts at
+# different paths, and requires identical SHA-256 (M5: "build reproduit bit
+# à bit"). The recipe is scripts/build-release.sh, the one the Release
+# workflow uses.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/**", "scripts/build-release.sh", ".github/workflows/reproducible.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  twice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: first
+      - uses: actions/checkout@v4
+        with:
+          path: second/elsewhere
+      - name: zig + cargo-zigbuild
+        run: |
+          pip3 install --user ziglang==0.13.0
+          cargo install cargo-zigbuild --locked
+      - name: Build 1
+        run: first/scripts/build-release.sh x86_64-unknown-linux-musl
+      - name: Build 2
+        run: second/elsewhere/scripts/build-release.sh x86_64-unknown-linux-musl
+      - name: Compare
+        run: |
+          a=$(sha256sum first/target/x86_64-unknown-linux-musl/release/harpochat-server | cut -d' ' -f1)
+          b=$(sha256sum second/elsewhere/target/x86_64-unknown-linux-musl/release/harpochat-server | cut -d' ' -f1)
+          echo "build 1: $a"; echo "build 2: $b"
+          test "$a" = "$b"
