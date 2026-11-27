@@ -187,6 +187,16 @@ impl Membership {
         self.reverify(&mut st, now)
     }
 
+    /// Verified nodes known (this node excluded).
+    pub fn len(&self) -> usize {
+        self.state.lock().expect("membership").members.len()
+    }
+
+    /// No other verified node known.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Whether `id` is a verified node of the mesh (this node excluded).
     pub fn is_member(&self, id: &[u8; 32]) -> bool {
         self.state.lock().expect("membership").members.contains(id)

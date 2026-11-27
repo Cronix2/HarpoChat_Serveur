@@ -50,6 +50,27 @@ const PHONE_BURST: usize = 16;
 const GOSSIP_QUEUE: usize = 256;
 /// Re-verification of the view (descriptor expiry).
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
+/// Aggregated counters are logged this often (spec §10: totals only).
+const STATS_EVERY: Duration = Duration::from_secs(600);
+
+/// One log line of anonymous totals: no address, no identifier, no size.
+fn log_stats(router: &Router, membership: &Membership, peers: &Peers) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let c = &router.counters;
+    tracing::info!(
+        "compteurs : paquets reçus {} · jetés {} · remis {} · push {} · loops {}/{} (perdus {})          · drops {} · nœuds connus {} · pairs {}",
+        c.packets_in.load(Relaxed),
+        c.packets_dropped.load(Relaxed),
+        c.delivered.load(Relaxed),
+        c.pushes.load(Relaxed),
+        c.loops_returned.load(Relaxed),
+        c.loops_sent.load(Relaxed),
+        c.loops_lost.load(Relaxed),
+        c.drops_sent.load(Relaxed),
+        membership.len(),
+        peers.ids().len(),
+    );
+}
 
 fn class_for(frame: &LinkFrame) -> SizeClass {
     if frame.body.len() <= SizeClass::Small.max_body_len() {
@@ -202,6 +223,21 @@ impl Server {
                         _ = refresh.tick() => membership.refresh(router.now()),
                     };
                     apply(&peers, &statics, changes);
+                }
+            }));
+        }
+        {
+            let (router, membership, peers) = (
+                self.router.clone(),
+                self.membership.clone(),
+                self.peers.clone(),
+            );
+            background.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(STATS_EVERY);
+                tick.tick().await;
+                loop {
+                    tick.tick().await;
+                    log_stats(&router, &membership, &peers);
                 }
             }));
         }
