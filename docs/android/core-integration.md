@@ -231,3 +231,4 @@ la PUT et le PUSH. Avec λ = 1 /s, comptez environ 1 s de plus.
 | P5 | **Fait** : voir §7. |
 | P6 | **Fait** : voir §8. Trames `Padding` à ignorer, `CoverRate`, SUBSCRIBE / PUSH, loops. |
 | P7 | **Fait**, rien à changer côté app : les annuaires listent aussi les nœuds parrainés, avec leur chaîne de `Vouch`. `verifyDirectory` vérifie les chaînes jusqu'aux racines embarquées, les révocations et la limite de 3 parrainages par 30 jours. Le champ `sponsor` de `FfiNode` sert déjà à la diversité des chemins. |
+| P8 | **Fait**. Un point à respecter : la **clé Sphinx de chaque nœud change tous les 7 jours** (l'ancienne reste acceptée 7 jours de plus) et un descripteur expire après 24 h. Rafraîchissez l'annuaire au moins une fois par jour, et à chaque reconnexion, avant de construire routes et SURB. Un paquet construit pour une clé vieille de plus de deux semaines est jeté sans réponse. |
