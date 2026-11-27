@@ -261,3 +261,38 @@ fn sizes_match_core_vectors() {
         f
     );
 }
+
+fn node(n: u8) -> FfiNode {
+    FfiNode {
+        id_pub: vec![n; 32],
+        noise_pub: vec![n; 32],
+        sphinx_pub: vec![n; 32],
+        roles: vec!["gateway".into(), "mix".into(), "mailbox".into()],
+        endpoints: vec![format!("wss://10.{n}.0.1:443")],
+        layer: n % 3,
+        valid_until: u64::MAX,
+        sponsor: None,
+    }
+}
+
+#[test]
+fn routes_through_ffi() {
+    let nodes: Vec<FfiNode> = (1..=5).map(node).collect();
+    let r = forward_route(nodes.clone(), vec![1; 32], vec![5; 32], 100).unwrap();
+    assert_eq!(r.hops.len(), 3);
+    assert_eq!(r.hops[0].id_pub, vec![1; 32]);
+    assert_eq!(r.hops[2].id_pub, vec![5; 32]);
+    assert_eq!((r.delays_ms[0], r.delays_ms[2]), (0, 0));
+    let s = reply_route(nodes.clone(), vec![1; 32], vec![5; 32], 100).unwrap();
+    assert_eq!(s.hops.last().unwrap().id_pub, vec![1; 32]);
+    let reps = mailbox_nodes(vec![9; 32], nodes.clone()).unwrap();
+    assert_eq!(reps.len(), 3);
+    assert_eq!(
+        reps,
+        mailbox_nodes(vec![9; 32], nodes.into_iter().rev().collect()).unwrap()
+    );
+    assert_eq!(
+        forward_route((1..=5).map(node).collect(), vec![2; 32], vec![2; 32], 100).err(),
+        Some(FfiError::Malformed)
+    );
+}

@@ -128,10 +128,35 @@ Pile, de bas en haut : **TCP → TLS 1.3 → WebSocket (messages binaires unique
 **En M1 (P4), le chemin ne compte qu'un saut** : `[gateway]` pour l'aller comme pour les SURB.
 Les chemins multi-nœuds arrivent en P5, sans changement de format.
 
+## 7. Chemins multi-nœuds (phase P5, implémentée)
+
+1. **Vue du réseau :** `verifyDirectory` sur les annuaires de plusieurs nœuds, puis
+   `intersectDirectories`. Le résultat (`List<FfiNode>`) sert à toutes les fonctions ci-dessous.
+2. **Où est une boîte ?** `mailboxNodes(mailboxId, nodes)` renvoie **3 répliques**, choisies par
+   hachage de rendez-vous. Expéditeur et destinataire les calculent chacun de leur côté, sans se
+   concerter.
+   - **PUT** : envoyez une copie à **chaque réplique qui n'est pas votre gateway**.
+   - **FETCH / SUBSCRIBE** : interrogez **les répliques qui ne sont pas votre gateway**.
+
+   Une route ne peut jamais finir sur sa propre gateway (`forwardRoute` renvoie `Malformed`) : la
+   gateway verrait à la fois votre IP et l'identifiant de la boîte. Avec 3 répliques, l'ensemble de
+   l'expéditeur et celui du destinataire ont toujours au moins une réplique en commun.
+3. **Aller :** `forwardRoute(nodes, gatewayId, replicaId, 100uL)` renvoie `FfiRoute { hops, delaysMs }`,
+   à passer tel quel à `buildForward(env, route.hops, localDelivery(), route.delaysMs, SMALL)`.
+4. **Retour (SURB) :** `replyRoute(nodes, gatewayId, replicaId, 100uL)` renvoie `mix… → gateway`, à
+   passer à `createSurb(route.hops, inbox, surbId, route.delaysMs)`.
+5. **Taille du mesh :** en dessous de 12 nœuds, un mix ; à partir de 12, trois mix (un par couche).
+   Les délais suivent une loi exponentielle de moyenne 100 ms, uniquement sur les mix.
+   Diversité : le noyau évite deux nœuds du même parrain, puis du même /16 IPv4, et relâche ces
+   contraintes dans cet ordre si le mesh est trop petit.
+6. **Nœud injoignable :** retirez-le de votre vue et recalculez routes et répliques. Les autres
+   répliques gardent le courrier.
+
 ## 5. Ce qui arrive ensuite
 
 | Phase | Pour vous |
 |---|---|
 | P2 — `core-v0.2.0` | **Fait** : voir [`gradle-integration.md`](gradle-integration.md). |
 | P4 | **Fait** : voir §6. Premier serveur joignable (`harpochat-server run`). |
-| P5–P6 | Mesh à 5 nœuds, SUBSCRIBE / PUSH en temps réel. |
+| P5 | **Fait** : voir §7. |
+| P6 | SUBSCRIBE / PUSH en temps réel, trafic de couverture. |

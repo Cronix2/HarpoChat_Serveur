@@ -793,3 +793,123 @@ pub fn intersect_directories(views: Vec<Vec<FfiNode>>) -> Vec<FfiNode> {
         .cloned()
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Routes and mailbox placement
+// ---------------------------------------------------------------------------
+
+/// A route with its per-hop delays.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiRoute {
+    /// Hops in order.
+    pub hops: Vec<FfiHop>,
+    /// Delay per hop (ms).
+    pub delays_ms: Vec<u64>,
+}
+
+fn candidates(nodes: &[FfiNode]) -> FfiResult<Vec<harpochat_core::path::Candidate>> {
+    nodes
+        .iter()
+        .map(|n| {
+            let roles = n
+                .roles
+                .iter()
+                .filter_map(|r| match r.as_str() {
+                    "gateway" => Some(Role::Gateway),
+                    "mix" => Some(Role::Mix),
+                    "mailbox" => Some(Role::Mailbox),
+                    _ => None,
+                })
+                .collect();
+            Ok(harpochat_core::path::Candidate {
+                hop: sphinx::Hop {
+                    id_pub: fixed(&n.id_pub)?,
+                    sphinx_pub: fixed(&n.sphinx_pub)?,
+                },
+                roles,
+                layer: n.layer,
+                sponsor: n.sponsor.as_deref().map(fixed).transpose()?,
+                ipv4_16: n
+                    .endpoints
+                    .iter()
+                    .find_map(|e| harpochat_core::path::ipv4_16_of(e)),
+            })
+        })
+        .collect()
+}
+
+fn os_pick(n: usize) -> usize {
+    (u64::from_le_bytes(core_random()) % n.max(1) as u64) as usize
+}
+
+fn os_uniform() -> f64 {
+    (u64::from_le_bytes(core_random()) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+fn to_ffi_route(r: harpochat_core::path::Route) -> FfiRoute {
+    FfiRoute {
+        hops: r
+            .hops
+            .into_iter()
+            .map(|h| FfiHop {
+                id_pub: h.id_pub.to_vec(),
+                sphinx_pub: h.sphinx_pub.to_vec(),
+            })
+            .collect(),
+        delays_ms: r.delays_ms,
+    }
+}
+
+/// Forward route `gateway → mix… → mailbox` with exponential delays
+/// (`mean_delay_ms`, 100 by default in the spec), OS randomness.
+#[uniffi::export]
+pub fn forward_route(
+    nodes: Vec<FfiNode>,
+    gateway: Vec<u8>,
+    mailbox: Vec<u8>,
+    mean_delay_ms: u64,
+) -> FfiResult<FfiRoute> {
+    let c = candidates(&nodes)?;
+    Ok(to_ffi_route(harpochat_core::path::forward_route(
+        &c,
+        &fixed(&gateway)?,
+        &fixed(&mailbox)?,
+        &mut os_pick,
+        &mut os_uniform,
+        mean_delay_ms,
+    )?))
+}
+
+/// SURB route `mix… → gateway` for replies sent by `mailbox`.
+#[uniffi::export]
+pub fn reply_route(
+    nodes: Vec<FfiNode>,
+    gateway: Vec<u8>,
+    mailbox: Vec<u8>,
+    mean_delay_ms: u64,
+) -> FfiResult<FfiRoute> {
+    let c = candidates(&nodes)?;
+    Ok(to_ffi_route(harpochat_core::path::reply_route(
+        &c,
+        &fixed(&gateway)?,
+        &fixed(&mailbox)?,
+        &mut os_pick,
+        &mut os_uniform,
+        mean_delay_ms,
+    )?))
+}
+
+/// Nodes holding a mailbox (3 replicas). PUT to every replica that is not
+/// your gateway; FETCH/SUBSCRIBE from the replicas that are not your gateway.
+#[uniffi::export]
+pub fn mailbox_nodes(mailbox_id: Vec<u8>, nodes: Vec<FfiNode>) -> FfiResult<Vec<Vec<u8>>> {
+    let c = candidates(&nodes)?;
+    Ok(harpochat_core::path::mailbox_nodes(
+        &fixed(&mailbox_id)?,
+        &c,
+        harpochat_core::path::MAILBOX_REPLICAS,
+    )
+    .into_iter()
+    .map(|id| id.to_vec())
+    .collect())
+}

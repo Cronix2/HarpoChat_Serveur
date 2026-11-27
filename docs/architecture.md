@@ -1,7 +1,7 @@
 # HarpoChat Server — architecture
 
 > **Pour :** toute personne qui découvre le projet, y compris le jury. Mise à jour à chaque phase.
-> **État :** phases P1 à P4 terminées (noyau, bindings Android, binaire, nœud joignable), en revue.
+> **État :** phases P1 à P5 terminées (noyau, bindings Android, binaire, nœud joignable, mesh multi-nœuds), en revue.
 
 ## 1. Le problème
 
@@ -76,7 +76,7 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 | P2 | Bindings Android (uniffi) | **terminé, en revue** |
 | P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
 | P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé, en revue** |
-| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | à faire |
+| P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé, en revue** |
 | P6 | Trafic de couverture, temps réel (M3, M3b) | à faire |
 | P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | à faire |
 | P8 | Fuzzing, audit des logs, builds reproductibles (M5) | à faire |

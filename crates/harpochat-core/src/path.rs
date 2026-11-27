@@ -44,7 +44,8 @@ pub struct Candidate {
     pub ipv4_16: Option<[u8; 2]>,
 }
 
-fn ipv4_16_of(endpoint: &str) -> Option<[u8; 2]> {
+/// First two octets of a `wss://` endpoint whose host is an IPv4 literal.
+pub fn ipv4_16_of(endpoint: &str) -> Option<[u8; 2]> {
     let rest = endpoint.strip_prefix("wss://")?;
     let authority = rest.split('/').next()?;
     let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
