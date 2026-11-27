@@ -48,6 +48,7 @@ pub struct MeshNode {
     pub addr: SocketAddr,
     pub id: [u8; 32],
     pub router: Arc<Router>,
+    pub peers: Arc<harpochat_server::peers::Peers>,
     pub stop: Option<oneshot::Sender<()>>,
 }
 
@@ -88,6 +89,7 @@ pub async fn start_mesh(n: usize, cover: Cover) -> Vec<MeshNode> {
         let node = Node::new(config, keys[i].clone(), now()).unwrap();
         let server = Server::new(node, system_clock()).unwrap();
         let router = server.router();
+        let peers = server.peers();
         let (stop, rx) = oneshot::channel();
         tokio::spawn(async move {
             server
@@ -101,10 +103,24 @@ pub async fn start_mesh(n: usize, cover: Cover) -> Vec<MeshNode> {
             addr: addrs[i],
             id: ids[i],
             router,
+            peers,
             stop: Some(stop),
         });
     }
+    wait_links(&mesh, n - 1).await;
     mesh
+}
+
+/// Wait until every node's outbound links to `links` peers are established
+/// (on a slow machine, handshakes take a while after start).
+pub async fn wait_links(mesh: &[MeshNode], links: usize) {
+    for _ in 0..300 {
+        if mesh.iter().all(|m| m.peers.connected() >= links) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("node links never all came up");
 }
 
 /// One directory request to the node `id` at `addr`; the verified nodes,

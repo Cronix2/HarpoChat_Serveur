@@ -16,6 +16,7 @@
 //! directory every `GOSSIP_EVERY` and hands it to the gossip channel.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -41,6 +42,7 @@ struct Peer {
     id: [u8; 32],
     tx: mpsc::Sender<Vec<u8>>,
     task: tokio::task::JoinHandle<()>,
+    up: Arc<AtomicBool>,
 }
 
 /// The peer table of a node.
@@ -97,16 +99,20 @@ impl Peers {
             return false;
         }
         let (tx, rx) = mpsc::channel(PEER_QUEUE);
+        let up = Arc::new(AtomicBool::new(false));
         let task = tokio::spawn(dialler(
             keys.clone(),
             id,
             endpoint,
             rx,
-            self.inbound.clone(),
-            self.gossip.clone(),
+            Outputs {
+                inbound: self.inbound.clone(),
+                gossip: self.gossip.clone(),
+            },
             Arc::new(Rate::new(self.link_rate)),
+            up.clone(),
         ));
-        map.insert(addr, Peer { id, tx, task });
+        map.insert(addr, Peer { id, tx, task, up });
         true
     }
 
@@ -139,6 +145,16 @@ impl Peers {
             .collect()
     }
 
+    /// Peers whose outbound link is established right now.
+    pub fn connected(&self) -> usize {
+        self.by_addr
+            .read()
+            .expect("peers")
+            .values()
+            .filter(|p| p.up.load(Ordering::Relaxed))
+            .count()
+    }
+
     /// Whether `id` is a peer.
     pub fn is_peer(&self, id: &[u8; 32]) -> bool {
         self.is_peer_addr(&node_address(id))
@@ -165,6 +181,13 @@ impl Drop for Peers {
     }
 }
 
+/// Where a dialler hands what its peer sends back.
+#[derive(Clone)]
+struct Outputs {
+    inbound: mpsc::Sender<Vec<u8>>,
+    gossip: mpsc::Sender<Vec<u8>>,
+}
+
 fn directory_req() -> LinkFrame {
     LinkFrame {
         kind: FrameKind::DirectoryReq,
@@ -177,9 +200,9 @@ async fn dialler(
     id: [u8; 32],
     endpoint: String,
     mut rx: mpsc::Receiver<Vec<u8>>,
-    inbound: mpsc::Sender<Vec<u8>>,
-    gossip: mpsc::Sender<Vec<u8>>,
+    out: Outputs,
     rate: Arc<Rate>,
+    up: Arc<AtomicBool>,
 ) {
     let mut backoff = BACKOFF_MIN;
     let mut shaper = Shaper::new(rate, PEER_BURST, os_uniform);
@@ -206,9 +229,10 @@ async fn dialler(
             continue;
         };
         backoff = BACKOFF_MIN;
+        up.store(true, Ordering::Relaxed);
         // Aborted when this iteration ends (link lost or dialler aborted).
         let mut read_task = AbortOnDrop({
-            let (inbound, gossip) = (inbound.clone(), gossip.clone());
+            let Outputs { inbound, gossip } = out.clone();
             tokio::spawn(async move {
                 while let Ok((_, frame)) = reader.recv().await {
                     match frame.kind {
@@ -242,6 +266,7 @@ async fn dialler(
                 _ = &mut read_task.0 => break,
             }
         }
+        up.store(false, Ordering::Relaxed);
     }
 }
 
