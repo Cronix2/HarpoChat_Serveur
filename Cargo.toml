@@ -46,6 +46,13 @@ serde_json = "1"
 hex = "0.4"
 proptest = "1"
 
+# Dependencies (crypto above all) optimised even in debug and test builds:
+# the cover-traffic scenarios run five-node meshes whose links encrypt
+# thousands of frames per second, which unoptimised ChaCha20 cannot keep up
+# with on a small CI runner. Our own crates stay unoptimised and debuggable.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 panic = "abort"
 debug = false
