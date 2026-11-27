@@ -619,6 +619,8 @@ pub enum FfiFrameKind {
     Gossip,
     /// SURB reply for this phone: `surb_id[16] || payload`.
     Deliver,
+    /// Phone → gateway: requested downlink cover rate (`cover_rate_body`).
+    CoverRate,
 }
 
 impl From<FfiFrameKind> for FrameKind {
@@ -633,6 +635,7 @@ impl From<FfiFrameKind> for FrameKind {
             FfiFrameKind::JoinResponse => FrameKind::JoinResponse,
             FfiFrameKind::Gossip => FrameKind::Gossip,
             FfiFrameKind::Deliver => FrameKind::Deliver,
+            FfiFrameKind::CoverRate => FrameKind::CoverRate,
         }
     }
 }
@@ -649,6 +652,7 @@ impl From<FrameKind> for FfiFrameKind {
             FrameKind::JoinResponse => FfiFrameKind::JoinResponse,
             FrameKind::Gossip => FfiFrameKind::Gossip,
             FrameKind::Deliver => FfiFrameKind::Deliver,
+            FrameKind::CoverRate => FfiFrameKind::CoverRate,
         }
     }
 }
@@ -676,6 +680,19 @@ pub fn encode_frame(
         body,
     }
     .encode(size_class.into())?)
+}
+
+/// Body of a `CoverRate` frame asking the gateway to send `frames_per_sec`
+/// frames per second to this phone (real or padding). The gateway clamps it
+/// to its configured bounds. Higher = lower latency and more anonymity, more
+/// data and battery (spec §6.3).
+#[uniffi::export]
+pub fn cover_rate_body(frames_per_sec: f64) -> FfiResult<Vec<u8>> {
+    if !frames_per_sec.is_finite() || frames_per_sec < 0.0 {
+        return Err(FfiError::Malformed);
+    }
+    let mhz = (frames_per_sec * 1000.0).round().min(u32::MAX as f64) as u32;
+    Ok(harpochat_core::link::cover_rate_body(mhz))
 }
 
 /// Decode a frame (after `FfiTransport.decrypt`).

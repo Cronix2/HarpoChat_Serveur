@@ -71,6 +71,8 @@ pub enum FrameKind {
     Gossip = 0x07,
     /// Gateway → phone: `surb_id[16] || final Sphinx payload` (E11).
     Deliver = 0x08,
+    /// Phone → gateway: downlink cover rate, `u32` big-endian in millihertz (E15).
+    CoverRate = 0x09,
 }
 
 impl FrameKind {
@@ -85,6 +87,7 @@ impl FrameKind {
             0x06 => FrameKind::JoinResponse,
             0x07 => FrameKind::Gossip,
             0x08 => FrameKind::Deliver,
+            0x09 => FrameKind::CoverRate,
             _ => return None,
         })
     }
@@ -146,6 +149,17 @@ impl LinkFrame {
     }
 }
 
+/// Body of a `CoverRate` frame: `mhz` (frames per 1 000 s) big-endian.
+pub fn cover_rate_body(mhz: u32) -> Vec<u8> {
+    mhz.to_be_bytes().to_vec()
+}
+
+/// Parse a `CoverRate` body (exactly 4 bytes).
+pub fn parse_cover_rate(body: &[u8]) -> Result<u32> {
+    let b: [u8; 4] = body.try_into().map_err(|_| CoreError::Malformed)?;
+    Ok(u32::from_be_bytes(b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,7 +218,7 @@ mod tests {
     #[test]
     fn frame_rejects_unknown_kind() {
         let mut bytes = LinkFrame::padding(SizeClass::Small);
-        bytes[0] = 0x09;
+        bytes[0] = 0x0A;
         assert_eq!(LinkFrame::decode(&bytes), Err(CoreError::Malformed));
     }
 
@@ -242,10 +256,20 @@ mod tests {
             (FrameKind::JoinResponse, 0x06),
             (FrameKind::Gossip, 0x07),
             (FrameKind::Deliver, 0x08),
+            (FrameKind::CoverRate, 0x09),
         ];
         for (k, code) in all {
             assert_eq!(k as u8, code);
         }
+    }
+
+    #[test]
+    fn cover_rate_roundtrip() {
+        for mhz in [0, 1, 1_000, u32::MAX] {
+            assert_eq!(parse_cover_rate(&cover_rate_body(mhz)), Ok(mhz));
+        }
+        assert_eq!(parse_cover_rate(&[1, 2, 3]), Err(CoreError::Malformed));
+        assert_eq!(parse_cover_rate(&[0; 5]), Err(CoreError::Malformed));
     }
 
     proptest! {

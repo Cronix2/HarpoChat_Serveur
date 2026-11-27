@@ -237,6 +237,87 @@ pub fn reply_route(
     Ok(Route { hops, delays_ms })
 }
 
+/// Loop emitted by node `own` (spec §6.3): `mix… → other → own`. The mixes
+/// and the other node delay; `own` does not. A 2-node mesh gives
+/// `[other, own]`.
+pub fn loop_route(
+    nodes: &[Candidate],
+    own: &[u8; 32],
+    pick: &mut dyn FnMut(usize) -> usize,
+    uniform: &mut dyn FnMut() -> f64,
+    mean_ms: u64,
+) -> Result<Route> {
+    let me = find(nodes, own)?;
+    let others: Vec<&Candidate> = nodes.iter().filter(|c| c.hop.id_pub != *own).collect();
+    if others.is_empty() {
+        return Err(CoreError::Malformed);
+    }
+    let mut hops = Vec::new();
+    let mut delays_ms = Vec::new();
+    let mixes = if others.len() >= 2 {
+        pick_mixes(nodes, &[me], mix_count(nodes), pick)?
+    } else {
+        Vec::new()
+    };
+    for m in &mixes {
+        hops.push(m.hop);
+        delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+    }
+    let rest: Vec<&&Candidate> = others
+        .iter()
+        .filter(|c| mixes.iter().all(|m| m.hop.id_pub != c.hop.id_pub))
+        .collect();
+    let Some(other) = (!rest.is_empty()).then(|| rest[pick(rest.len()) % rest.len()]) else {
+        return Err(CoreError::Malformed);
+    };
+    hops.push(other.hop);
+    delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+    hops.push(me.hop);
+    delays_ms.push(0);
+    Ok(Route { hops, delays_ms })
+}
+
+/// Drop emitted by node `own` (spec §6.3): `mix… → mailbox`, never `own`.
+/// `avoid` (e.g. suspect nodes) is skipped while other choices exist.
+pub fn drop_route(
+    nodes: &[Candidate],
+    own: &[u8; 32],
+    avoid: &[[u8; 32]],
+    pick: &mut dyn FnMut(usize) -> usize,
+    uniform: &mut dyn FnMut() -> f64,
+    mean_ms: u64,
+) -> Result<Route> {
+    let me = find(nodes, own)?;
+    let boxes: Vec<&Candidate> = nodes
+        .iter()
+        .filter(|c| c.hop.id_pub != *own && c.roles.contains(&Role::Mailbox))
+        .collect();
+    let healthy: Vec<&Candidate> = boxes
+        .iter()
+        .copied()
+        .filter(|c| !avoid.contains(&c.hop.id_pub))
+        .collect();
+    let set = if healthy.is_empty() { &boxes } else { &healthy };
+    if set.is_empty() {
+        return Err(CoreError::Malformed);
+    }
+    let mb = set[pick(set.len()) % set.len()];
+    let mixes = if nodes.len() >= 3 {
+        pick_mixes(nodes, &[me, mb], mix_count(nodes), pick)?
+    } else {
+        Vec::new()
+    };
+    let mut hops = Vec::new();
+    let mut delays_ms = Vec::new();
+    for m in mixes {
+        hops.push(m.hop);
+        delays_ms.push(exponential_delay_ms(mean_ms, uniform()));
+    }
+    hops.push(mb.hop);
+    delays_ms.push(0);
+    Ok(Route { hops, delays_ms })
+}
+
 /// Nodes holding `mailbox_id`: the `n` mailbox-role nodes with the highest
 /// rendezvous score `H("harpo-mbx-place" ‖ mailbox_id ‖ id_pub)`.
 pub fn mailbox_nodes(mailbox_id: &[u8; 32], nodes: &[Candidate], n: usize) -> Vec<[u8; 32]> {
@@ -498,6 +579,91 @@ mod tests {
                 let b: Vec<_> = reps.iter().filter(|r| **r != [gw_b; 32]).collect();
                 assert!(a.iter().any(|x| b.contains(x)));
             }
+        }
+    }
+
+    #[test]
+    fn loop_route_returns_home_without_repeats() {
+        let nodes = mesh(5);
+        let mut rng = Rng(77);
+        for _ in 0..200 {
+            let own = (rng.pick(5) + 1) as u8;
+            let (mut p, mut u) = (Rng(rng.next()), Rng(rng.next()));
+            let r = loop_route(
+                &nodes,
+                &[own; 32],
+                &mut |n| p.pick(n),
+                &mut || u.uniform(),
+                DEFAULT_MEAN_DELAY_MS,
+            )
+            .unwrap();
+            let v = ids(&r);
+            assert_eq!(v.len(), 3);
+            assert_eq!(*v.last().unwrap(), own);
+            assert!(v[..2].iter().all(|i| *i != own));
+            assert_ne!(v[0], v[1]);
+            assert_eq!(*r.delays_ms.last().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn loop_route_small_mesh() {
+        let mut p = Rng(1);
+        let mut u = Rng(2);
+        let mut go = |n: u8| {
+            loop_route(
+                &mesh(n),
+                &[1; 32],
+                &mut |k| p.pick(k),
+                &mut || u.uniform(),
+                DEFAULT_MEAN_DELAY_MS,
+            )
+        };
+        assert_eq!(ids(&go(2).unwrap()), vec![2, 1]);
+        assert_eq!(go(1).err(), Some(CoreError::Malformed));
+        assert_eq!(go(12).unwrap().hops.len(), 5);
+    }
+
+    #[test]
+    fn drop_route_never_targets_self() {
+        let nodes = mesh(5);
+        let mut rng = Rng(99);
+        for _ in 0..200 {
+            let own = (rng.pick(5) + 1) as u8;
+            let (mut p, mut u) = (Rng(rng.next()), Rng(rng.next()));
+            let r = drop_route(
+                &nodes,
+                &[own; 32],
+                &[],
+                &mut |n| p.pick(n),
+                &mut || u.uniform(),
+                DEFAULT_MEAN_DELAY_MS,
+            )
+            .unwrap();
+            let mut v = ids(&r);
+            assert!(!v.contains(&own));
+            assert_eq!(v.len(), 2);
+            v.dedup();
+            assert_eq!(v.len(), 2);
+        }
+    }
+
+    #[test]
+    fn drop_route_avoids_suspects_while_possible() {
+        let nodes = mesh(4);
+        let avoid = [[2; 32], [3; 32]];
+        for seed in 1..30 {
+            let (mut p, mut u) = (Rng(seed), Rng(seed + 100));
+            let r = drop_route(
+                &nodes,
+                &[1; 32],
+                &avoid,
+                &mut |n| p.pick(n),
+                &mut || u.uniform(),
+                DEFAULT_MEAN_DELAY_MS,
+            )
+            .unwrap();
+            assert_eq!(*ids(&r).last().unwrap(), 4);
         }
     }
 }
