@@ -53,11 +53,23 @@ crates/harpochat-core-ffi  bindings Kotlin (uniffi) du noyau, pour l'app Android
 crates/harpochat-server  binaire du nœud
   config, keystore, node, cli   harpochat-server.toml, node.key, init / run
   net, server                   TLS + WebSocket + Noise, liens téléphone et nœud
-  peers                         liens sortants vers les autres nœuds (pairs statiques, gossip en P7)
+  peers                         liens sortants vers les autres nœuds (configurés ou appris)
+  membership                    vue du mesh : fusion des annuaires (gossip), revérification
+  sponsor, join                 parrainage : jetons, côté parrain et côté nouveau nœud
   router                        couche Sphinx : anti-rejeu, délais, transmission, remise
   service, store                boîtes aux lettres en RAM, abonnements SURB (PUSH / NOTIFY)
   cover                         façonnage des liens, loops et drops du nœud, mesure des pertes
 ```
+
+### Admission par parrainage (P7)
+
+Un nœud n'entre dans le mesh que par une chaîne de certificats `Vouch` qui remonte à une racine
+embarquée dans l'app. Le parrain émet un jeton autoporteur (`invite-node`). Le nouveau nœud le
+présente (`join`) en prouvant, par Noise, l'identité de son descripteur. Le parrain brûle le jeton
+et signe le certificat. Chaque nœud fusionne ensuite les annuaires de ses voisins toutes les 5 s et
+revérifie tout : chaînes, révocations, limite de 3 parrainages par 30 jours. Il ne se relie qu'aux
+nœuds qui passent ces vérifications. Un nœud qui n'a pas de chaîne valide n'est accepté par
+personne, ni par les autres nœuds ni par les apps : c'est la barrière contre les faux serveurs.
 
 ### Trafic de couverture (P6)
 
@@ -95,5 +107,5 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 | P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé** |
 | P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé** |
 | P6 | Trafic de couverture, temps réel (M3, M3b) | **terminé, en revue** |
-| P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | à faire |
+| P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | **terminé, en revue** |
 | P8 | Fuzzing, audit des logs, builds reproductibles (M5) | à faire |

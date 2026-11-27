@@ -54,30 +54,50 @@ La commande affiche l'identifiant du nœud et une ligne `bootstrap-entry: …`. 
 publique et adresses, **aucun secret**) est à intégrer dans le bloc d'amorçage de l'application.
 Mettez de préférence une adresse par nom de domaine **et** une par IP directe (spec §4.4).
 
-**Nœud ordinaire :**
+**Nœud ordinaire : un seul copier-coller.** Sur un nœud déjà membre du mesh (le *parrain*) :
 
 ```bash
-harpochat-server --dir /var/lib/harpochat init --endpoint wss://mon-noeud.example:443
+harpochat-server --dir /var/lib/harpochat invite-node
+hcn1-M9J64VV4F5C919B…(≈ 360 caractères)
+  ↳ valable 48 h, utilisable une seule fois. C'est un secret : transmettez-le par un canal de confiance.
 ```
 
-Ajoutez ensuite les racines dans `harpochat-server.toml` :
+Sur la nouvelle machine, avec un répertoire de données **vide** :
 
-```toml
-[[roots]]
-id_pub = "<64 caractères hexadécimaux>"
-endpoints = ["wss://racine.example:443"]
+```bash
+harpochat-server --dir /var/lib/harpochat join 'hcn1-M9J64…' --endpoint wss://mon-noeud.example:443
+✔ clés générées · id: de8b19a7…
+✔ parrain joint · 9aa0182f…
+✔ certificat de parrainage reçu (chaîne de 1 maillon(s), 1 racine(s))
+→ lancez `harpochat-server --dir /var/lib/harpochat run` : le nœud s'annoncera au mesh
 ```
 
-Et les autres nœuds du mesh, auxquels ce nœud se connecte pour relayer les paquets :
+- Pour que le jeton n'apparaisse ni dans l'historique du shell ni dans la liste des processus,
+  passez `-` : `harpochat-server join - --endpoint … < jeton.txt`.
+- `join` n'écrit rien en cas d'échec : jeton expiré, déjà utilisé, mal copié, parrain injoignable,
+  ou limite de parrainage atteinte. Le parrain refuse sans dire pourquoi : c'est voulu.
+- Le nœud reçoit son **certificat de parrainage** (`Vouch`) et les clés des racines. Le tout est
+  écrit dans `harpochat-server.toml` (`node.chain`, `[[roots]]`, le parrain dans `[[peers]]`). Une
+  fois lancé, il découvre les autres nœuds par **gossip** : chaque nœud interroge l'annuaire de ses
+  voisins toutes les 5 s, et se relie à tout nœud dont la chaîne de parrainage remonte à une racine.
+- **Limite :** un nœud parraine au plus **3 nœuds par période de 30 jours** (`[sponsor] limit`,
+  3 au maximum). Tous les nœuds **et** toutes les apps appliquent cette règle aux chaînes qu'ils
+  vérifient : un parrain compromis ne peut pas inonder le mesh.
+- Le parrain garde dans `[[sponsor.vouched]]` la trace des jetons consommés. Un jeton reste donc
+  brûlé même après un redémarrage. Ces lignes ne contiennent que des identifiants publics.
 
-```toml
-[[peers]]
-id_pub = "<64 caractères hexadécimaux>"
-endpoint = "wss://autre-noeud.example:443"
+**Révoquer** un nœud que vous avez parrainé (ou n'importe quel nœud, depuis une racine) :
+
+```bash
+harpochat-server --dir /var/lib/harpochat revoke <id du nœud, 64 caractères hex>
 ```
 
-(En phase P7, ces deux étapes seront remplacées par un seul copier-coller,
-`harpochat-server join <jeton>`, et les pairs seront découverts automatiquement par gossip.)
+La révocation est écrite dans `revocations` et publiée par gossip **au prochain redémarrage** du
+nœud. Le nœud révoqué disparaît de tous les annuaires, ainsi que les nœuds qu'il aurait parrainés
+**après** la révocation.
+
+**Configuration manuelle** (avancé, sans jeton) : `[[roots]]` (identité et adresses des racines),
+`[[peers]]` (nœuds auxquels se relier d'office) et `node.chain` (certificats, hexadécimal CBOR).
 
 `init` refuse de s'exécuter sur un répertoire qui contient déjà un nœud : la clé n'est jamais écrasée.
 
