@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/harpochat-core", "crates/harpochat-core-ffi", "crates/harpochat-server"]
+# cargo-fuzz targets (nightly), built on their own: see fuzz/Cargo.toml.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

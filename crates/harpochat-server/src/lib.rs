@@ -8,6 +8,8 @@
 pub mod cli;
 pub mod config;
 pub mod cover;
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod join;
 pub mod keystore;
 pub mod membership;
