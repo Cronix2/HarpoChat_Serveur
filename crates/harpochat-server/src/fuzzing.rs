@@ -125,8 +125,11 @@ pub fn config(data: &[u8]) {
     }
 }
 
+/// A fuzzing body.
+pub type Body = fn(&[u8]);
+
 /// All bodies by name (used by the stable test and the fuzz crate docs).
-pub const BODIES: &[(&str, fn(&[u8]))] = &[
+pub const BODIES: &[(&str, Body)] = &[
     ("link_frame", link_frame),
     ("envelope", envelope),
     ("sphinx_packet", sphinx_packet),
