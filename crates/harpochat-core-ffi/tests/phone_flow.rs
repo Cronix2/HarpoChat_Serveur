@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
+use corekit::*;
 use futures_util::{SinkExt, StreamExt};
-use harpochat_core_ffi::*;
 use harpochat_server::config::Config;
 use harpochat_server::keystore::NodeKeys;
 use harpochat_server::node::Node;

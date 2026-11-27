@@ -14,10 +14,10 @@ suivre le développement. Sur une PR, le workflow **Android core** fournit aussi
 artefact. Contenu de l'archive :
 
 ```text
-jniLibs/arm64-v8a/libharpochat_core_ffi.so
-jniLibs/armeabi-v7a/libharpochat_core_ffi.so
-jniLibs/x86_64/libharpochat_core_ffi.so
-kotlin/app/harpochat/core/harpochat_core_ffi.kt     bindings générés (uniffi 0.33), package app.harpochat.core
+jniLibs/arm64-v8a/libcorekit.so
+jniLibs/armeabi-v7a/libcorekit.so
+jniLibs/x86_64/libcorekit.so
+kotlin/app/harpochat/core/corekit.kt                 bindings générés (uniffi 0.33), package app.harpochat.core
 test-vectors/v1.json                                 vecteurs à rejouer dans vos tests
 ```
 
@@ -28,14 +28,22 @@ Les `.so` sont compilés avec `minSdk` 26 (`--platform 26`), comme l'app.
 1. Copiez `jniLibs/` dans `app/src/main/jniLibs/`, et `kotlin/app/harpochat/core/` dans
    `app/src/main/java/app/harpochat/core/`. Ces fichiers sont générés : ne les modifiez pas, remplacez-les à
    chaque nouvelle version du noyau.
-2. Ajoutez JNA, dont dépendent les bindings uniffi :
+2. Ajoutez JNA, dont dépendent les bindings uniffi, et `androidx.annotation` : les bindings sont
+   générés en mode Android (`android = true`), avec des gardes `@RequiresApi` sur l'API 34.
 
 ```kotlin
 // app/build.gradle.kts
 dependencies {
     implementation("net.java.dev.jna:jna:5.17.0@aar")
+    implementation("androidx.annotation:annotation:1.9.1")
 }
 ```
+
+**Discrétion.** La bibliothèque native s'appelle `libcorekit.so` : ni son nom, ni ses symboles
+exportés (`uniffi_corekit_…`), ni ses chemins de compilation ne nomment l'app. Il reste une dizaine
+d'occurrences de « harpochat » : ce sont les étiquettes de séparation de domaine du protocole
+(`harpochat/v1/…`), fixées par la spec et nécessaires à l'interopérabilité. La CI échoue si la
+bibliothèque en contient davantage.
 
 3. R8 / ProGuard (activé dans l'app) : conservez JNA et les bindings, qui sont appelés par réflexion.
 
