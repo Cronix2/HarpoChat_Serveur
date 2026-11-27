@@ -35,11 +35,17 @@ pub struct Changes {
     pub removed: Vec<[u8; 32]>,
 }
 
+/// Sponsorship links remembered for judging revocations.
+const MAX_SEEN_LINKS: usize = 16_384;
+
 #[derive(Default)]
 struct State {
     entries: HashMap<[u8; 32], DirectoryEntry>,
     revocations: Vec<Signed<Revoke>>,
     members: HashSet<[u8; 32]>,
+    /// `(node, sponsor)` of every vouch seen in a chain, kept after the
+    /// entry is gone so its sponsor's revocation stays relevant.
+    seen_links: HashSet<([u8; 32], [u8; 32])>,
 }
 
 /// The node's view of the mesh.
@@ -80,6 +86,11 @@ impl Membership {
         if d.id_pub == self.own {
             return;
         }
+        for v in e.chain.iter().filter_map(|v| v.verify().ok()) {
+            if st.seen_links.len() < MAX_SEEN_LINKS {
+                st.seen_links.insert((v.node_id, v.sponsor_id));
+            }
+        }
         let newer = st
             .entries
             .get(&d.id_pub)
@@ -88,6 +99,18 @@ impl Membership {
         {
             st.entries.insert(d.id_pub, e);
         }
+    }
+
+    /// Keep only revocations that can take effect: signed by a root, or by
+    /// a sponsor that vouched for the revoked node in a known chain. Others
+    /// would only fill the bounded list (a member signing junk revocations).
+    fn prune_revocations(&self, st: &mut State) {
+        let (roots, links) = (&self.roots, &st.seen_links);
+        st.revocations.retain(|r| {
+            r.peek().is_ok_and(|r| {
+                roots.contains(&r.sponsor_id) || links.contains(&(r.node_id, r.sponsor_id))
+            })
+        });
     }
 
     /// Re-verify everything; drop what no longer verifies.
@@ -140,6 +163,7 @@ impl Membership {
         for e in d.entries {
             self.add_entry(&mut st, e);
         }
+        self.prune_revocations(&mut st);
         self.reverify(&mut st, now)
     }
 
@@ -423,5 +447,83 @@ mod tests {
             r.public(),
             "own entry kept first"
         );
+    }
+
+    #[test]
+    fn junk_revocations_are_not_kept() {
+        let root_keys = NodeKeys::generate();
+        let r = &root_keys.identity;
+        let me = member_node(r);
+        let m = Membership::new(&me);
+        let a = SigningKey::generate();
+        let mallory = SigningKey::generate();
+        m.insert(
+            DirectoryEntry {
+                descriptor: desc(&a, NOW + 900),
+                chain: vec![vouch(r, &a)],
+            },
+            NOW,
+        );
+        // Mallory (no standing over A) floods revocations: none is kept.
+        let junk: Vec<Signed<Revoke>> = (0..50u8)
+            .map(|i| {
+                Signed::sign(
+                    &mallory,
+                    &Revoke {
+                        v: 1,
+                        node_id: [i; 32],
+                        sponsor_id: mallory.public(),
+                        revoked_at: NOW,
+                    },
+                )
+            })
+            .collect();
+        m.merge(&directory_of(&mallory, vec![], junk), NOW);
+        let d = m.directory(&me, NOW).verify().unwrap();
+        assert!(d.revocations.is_empty());
+        assert!(m.is_member(&a.public()));
+    }
+
+    #[test]
+    fn sponsor_revocation_outlives_the_revoked_entry() {
+        let root_keys = NodeKeys::generate();
+        let r = &root_keys.identity;
+        let me = member_node(r);
+        let m = Membership::new(&me);
+        let (a, b) = (SigningKey::generate(), SigningKey::generate());
+        let b_entry = DirectoryEntry {
+            descriptor: desc(&b, NOW + 900),
+            chain: vec![
+                Signed::sign(
+                    &a,
+                    &Vouch {
+                        v: 1,
+                        node_id: b.public(),
+                        sponsor_id: a.public(),
+                        issued: NOW - 50,
+                    },
+                ),
+                vouch(r, &a),
+            ],
+        };
+        m.merge(&directory_of(r, vec![b_entry.clone()], vec![]), NOW);
+        assert!(m.is_member(&b.public()));
+        // A (B's sponsor, not a root) revokes B.
+        let rev = Signed::sign(
+            &a,
+            &Revoke {
+                v: 1,
+                node_id: b.public(),
+                sponsor_id: a.public(),
+                revoked_at: NOW - 1,
+            },
+        );
+        m.merge(&directory_of(&a, vec![], vec![rev]), NOW);
+        assert!(!m.is_member(&b.public()));
+        // Another gossip round in which B is absent everywhere…
+        m.merge(&directory_of(r, vec![], vec![]), NOW);
+        // …then a stale peer still lists B: the revocation holds.
+        m.merge(&directory_of(r, vec![b_entry], vec![]), NOW);
+        assert!(!m.is_member(&b.public()));
     }
 }

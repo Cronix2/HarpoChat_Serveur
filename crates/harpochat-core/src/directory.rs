@@ -14,6 +14,8 @@
 //! Every verifier enforces it over the vouches it sees, so a compromised
 //! sponsor cannot flood the mesh: excess vouches (latest `issued` first, then
 //! highest `node_id`) are void, and so is every entry whose chain uses one.
+//! A vouch issued before its sponsor's own vouch is void too, so backdating
+//! cannot reach before the sponsor's admission.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -181,9 +183,13 @@ pub fn verify_entry(
     let mut current = node;
     for (i, link) in links.iter().enumerate() {
         let next_sponsor = links.get(i + 1).map(|l| &l.sponsor_id);
+        // A sponsor cannot vouch before it was itself admitted: this bounds
+        // how far a compromised sponsor can backdate to dodge the limit.
+        let after_own_admission = links.get(i + 1).is_none_or(|up| link.issued >= up.issued);
         let ok = link.v == VERSION
             && link.node_id == current
             && link.issued <= now_unix_secs.saturating_add(CLOCK_SKEW_SECS)
+            && after_own_admission
             && seen.insert(link.sponsor_id);
         if !ok {
             return Err(CoreError::Untrusted);
@@ -698,5 +704,18 @@ mod tests {
         assert!(ok
             .iter()
             .all(|(_, v)| v.descriptor.id_pub != grandchild.public()));
+    }
+
+    #[test]
+    fn vouch_before_sponsor_admission_rejected() {
+        let (r, a, b, roots) = setup();
+        // A was admitted at NOW - 100; a vouch by A dated earlier is void.
+        let early = entry(&b, vec![vouch(&a, &b, NOW - 200), vouch(&r, &a, NOW - 100)]);
+        assert_eq!(
+            verify_entry(&early, &roots, &[], NOW),
+            Err(CoreError::Untrusted)
+        );
+        let fine = entry(&b, vec![vouch(&a, &b, NOW - 50), vouch(&r, &a, NOW - 100)]);
+        assert!(verify_entry(&fine, &roots, &[], NOW).is_ok());
     }
 }
