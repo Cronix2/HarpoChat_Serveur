@@ -1,7 +1,7 @@
 # HarpoChat Server — architecture
 
 > **Pour :** toute personne qui découvre le projet, y compris le jury. Mise à jour à chaque phase.
-> **État :** phases P1, P3 et P4 (un nœud joignable, boîtes aux lettres en RAM) terminées, en revue.
+> **État :** phases P1 à P4 terminées (noyau, bindings Android, binaire, nœud joignable), en revue.
 
 ## 1. Le problème
 
@@ -48,6 +48,7 @@ crates/harpochat-core   noyau partagé serveur + Android, pur (aucun I/O, aucun 
 ```
 
 ```text
+crates/harpochat-core-ffi  bindings Kotlin (uniffi) du noyau, pour l'app Android
 crates/harpochat-server  binaire du nœud : config TOML, node.key, init / run (réseau en P4)
 ```
 
@@ -72,7 +73,7 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 | Phase | Contenu | État |
 |---|---|---|
 | P1 | Noyau `harpochat-core` v0.1, vecteurs, CI | **terminé, en revue** |
-| P2 | Bindings Android (uniffi) | à faire |
+| P2 | Bindings Android (uniffi) | **terminé, en revue** |
 | P3 | Binaire, CLI, configuration, releases signées (M0) | **terminé, en revue** |
 | P4 | Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) | **terminé, en revue** |
 | P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | à faire |
