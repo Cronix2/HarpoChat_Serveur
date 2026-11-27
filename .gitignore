@@ -1,11 +1,9 @@
 # Rust
 /target
 **/*.rs.bk
-Cargo.lock
-*.db
-*.db-journal
-*.sqlite
-*.sqlite-journal
+
+# Local scratch (agent workspaces)
+/.superpowers/
 
 # Editor / OS
 .vscode/

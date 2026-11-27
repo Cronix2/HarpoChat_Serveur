@@ -1,0 +1,101 @@
+name: Release
+
+# Builds the three standalone binaries of spec §12.1 on a `v*` tag, writes
+# SHA256SUMS and signs it keylessly with Sigstore cosign (GitHub OIDC):
+# anyone can check that a binary was built by this repository's workflow.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: harpochat-server-windows-x86_64.exe
+            zig: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: harpochat-server-linux-x86_64
+            zig: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: harpochat-server-linux-aarch64
+            zig: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      - name: Reproducibility settings
+        shell: bash
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+      - name: Install zig + cargo-zigbuild
+        if: matrix.zig
+        run: |
+          pip3 install --user ziglang
+          cargo install cargo-zigbuild --locked
+      - name: Build (musl, static)
+        if: matrix.zig
+        env:
+          RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}=. --remap-path-prefix=/home/runner/.cargo=/cargo"
+        run: cargo zigbuild --release --locked -p harpochat-server --target ${{ matrix.target }}
+      - name: Build (Windows, static CRT)
+        if: ${{ !matrix.zig }}
+        shell: bash
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static --remap-path-prefix=${{ github.workspace }}=."
+        run: cargo build --release --locked -p harpochat-server --target ${{ matrix.target }}
+      - name: Rename artifact
+        shell: bash
+        run: |
+          src=target/${{ matrix.target }}/release/harpochat-server
+          [ -f "$src.exe" ] && src="$src.exe"
+          mkdir -p dist && cp "$src" "dist/${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    name: checksums, signature, release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: sha256sum harpochat-server-* > SHA256SUMS && cat SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign SHA256SUMS (keyless)
+        working-directory: dist
+        run: cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "harpochat-server ${GITHUB_REF_NAME}" \
+            --notes "Binaires autonomes. Vérification : voir docs/operators/install.md."
