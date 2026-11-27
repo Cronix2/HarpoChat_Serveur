@@ -10,7 +10,8 @@ use harpochat_core::directory::{verify_directory, Directory, VerifiedNode};
 use harpochat_core::envelope::{self, Message};
 use harpochat_core::keys::random_bytes;
 use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
-use harpochat_core::path::{self, Candidate, DEFAULT_MEAN_DELAY_MS};
+use harpochat_core::mailbox::{epoch_of, sign_put, sign_read, MailboxKeys, ReadOp};
+use harpochat_core::path::{self, Candidate, DEFAULT_MEAN_DELAY_MS, MAILBOX_REPLICAS};
 use harpochat_core::signed::Signed;
 use harpochat_core::sphinx::{self, Hop, LOCAL_DELIVERY};
 use harpochat_server::config::{Config, Cover, PeerConfig, RootConfig};
@@ -106,16 +107,18 @@ pub async fn start_mesh(n: usize, cover: Cover) -> Vec<MeshNode> {
     mesh
 }
 
-fn identity_hop(node: &MeshNode) -> Hop {
-    Hop {
-        id_pub: node.id,
+/// One directory request to the node `id` at `addr`; the verified nodes,
+/// if an answer came.
+pub async fn directory_at(
+    addr: SocketAddr,
+    id: [u8; 32],
+    roots: &[[u8; 32]],
+) -> Option<Vec<VerifiedNode>> {
+    let hop = Hop {
+        id_pub: id,
         sphinx_pub: [0; 32], // unused for the directory exchange
-    }
-}
-
-/// One directory request; the verified nodes, if any answer came.
-pub async fn directory_once(node: &MeshNode, roots: &[[u8; 32]]) -> Option<Vec<VerifiedNode>> {
-    let mut c = Client::connect(node.addr, identity_hop(node)).await.ok()?;
+    };
+    let mut c = Client::connect(addr, hop).await.ok()?;
     c.writer
         .send(
             &LinkFrame {
@@ -129,6 +132,11 @@ pub async fn directory_once(node: &MeshNode, roots: &[[u8; 32]]) -> Option<Vec<V
     let (_, f) = c.recv_real(Duration::from_secs(2)).await?;
     let d: Signed<Directory> = harpochat_core::cbor::from_slice(&f.body, 1 << 20).ok()?;
     verify_directory(&d, roots, now()).ok()
+}
+
+/// One directory request to a mesh node.
+pub async fn directory_once(node: &MeshNode, roots: &[[u8; 32]]) -> Option<Vec<VerifiedNode>> {
+    directory_at(node.addr, node.id, roots).await
 }
 
 /// Ask `node` for its directory until it lists `expected` verified nodes.
@@ -211,4 +219,66 @@ pub async fn next_deliver(c: &mut Client, within: Duration) -> Option<([u8; 16],
         frame.body[..16].try_into().unwrap(),
         frame.body[16..].to_vec(),
     ))
+}
+
+/// A puts into every replica that is not its gateway; B fetches the first
+/// replica that is neither gateway; returns (replica used, blobs received).
+pub async fn exchange(
+    mesh: &[(SocketAddr, [u8; 32])],
+    cands: &[Candidate],
+    gw_a: usize,
+    gw_b: usize,
+    payload: &[u8],
+) -> ([u8; 32], Vec<Vec<u8>>) {
+    let k = MailboxKeys::derive(&random_bytes(), epoch_of(now()));
+    let replicas = path::mailbox_nodes(&k.mailbox_id(), cands, MAILBOX_REPLICAS);
+
+    let mut alice = Client::connect(mesh[gw_a].0, hop_of(cands, &mesh[gw_a].1))
+        .await
+        .unwrap();
+    for r in replicas.iter().filter(|r| **r != mesh[gw_a].1) {
+        let msg = Message::Put {
+            mailbox_id: k.mailbox_id(),
+            write_auth: sign_put(&k, payload, random_bytes()),
+            blob: payload.to_vec(),
+        };
+        send(&mut alice, &forward(cands, &mesh[gw_a].1, r), &msg).await;
+    }
+    // Mix delays (mean 100 ms), link slots (50 Hz) and loopback latency.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let target = *replicas
+        .iter()
+        .find(|r| **r != mesh[gw_a].1 && **r != mesh[gw_b].1)
+        .expect("a replica outside both gateways");
+    let mut bob = Client::connect(mesh[gw_b].0, hop_of(cands, &mesh[gw_b].1))
+        .await
+        .unwrap();
+    let surb_route = reply(cands, &mesh[gw_b].1, &target);
+    let surb_id = random_bytes();
+    let (surb, rec) =
+        sphinx::create_surb(&surb_route.hops, bob.inbox, surb_id, &surb_route.delays_ms).unwrap();
+    let unsigned = Message::Fetch {
+        mailbox_id: k.mailbox_id(),
+        read_auth: sign_read(&k, ReadOp::Fetch, b"", now(), [0; 16]),
+        max: 16,
+        surbs: vec![surb.clone()],
+    };
+    let (op, bound) = envelope::read_bound(&unsigned).unwrap();
+    let fetch = Message::Fetch {
+        mailbox_id: k.mailbox_id(),
+        read_auth: sign_read(&k, op, &bound, now(), random_bytes()),
+        max: 16,
+        surbs: vec![surb],
+    };
+    send(&mut bob, &forward(cands, &mesh[gw_b].1, &target), &fetch).await;
+    let (id, payload) = next_deliver(&mut bob, Duration::from_secs(10))
+        .await
+        .expect("reply in time");
+    assert_eq!(id, surb_id);
+    let plain = sphinx::recover_reply(&rec, &payload).unwrap();
+    let Message::FetchResponse { blobs, .. } = envelope::decode(&plain).unwrap() else {
+        panic!("expected FetchResponse")
+    };
+    (target, blobs.into_iter().map(|b| b.blob).collect())
 }
