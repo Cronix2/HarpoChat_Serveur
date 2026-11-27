@@ -91,10 +91,47 @@ la table `sizes`. Les vecteurs Sphinx figent un paquet et les clés des nœuds ;
 est le texte clair après traitement de tous les sauts. Votre CI devra les rejouer via les bindings
 de P2. Côté serveur, `cargo test -p harpochat-core --test vectors` les rejoue.
 
+## 6. Connexion à un nœud (phase P4, implémentée côté serveur)
+
+Pile, de bas en haut : **TCP → TLS 1.3 → WebSocket (messages binaires uniquement) → Noise XX**.
+
+1. **TLS :** le nœud présente un certificat auto-signé, régénéré en RAM à chaque démarrage.
+   **Acceptez n'importe quel certificat** (mais laissez la vérification des signatures de la
+   poignée de main TLS active). TLS ne sert qu'à ressembler à du HTTPS ordinaire. URL de la requête
+   WebSocket : `wss://harpochat/` (le chemin est ignoré).
+2. **Noise :** `Noise_XX_25519_ChaChaPoly_BLAKE2s`, le téléphone est l'**initiateur**. Utilisez
+   `harpochat_core::noise::Handshake::initiator(&X25519Secret::generate(), None)` : une clé statique
+   **neuve à chaque connexion**, sans identité. Trois messages binaires : vous écrivez le 1, lisez le
+   2, écrivez le 3. Le message 2 porte la preuve `NodeAuth` du nœud. Après `into_transport()`,
+   **vérifiez `peer.node_id == Some(id_pub attendu)`**, la clé de la racine ou du descripteur :
+   c'est ce qui authentifie le nœud.
+3. **Ensuite**, chaque message WebSocket est **un** message Noise de 2 048 o (`Small`) ou de
+   32 768 o (`Large`). Le clair est une `LinkFrame` de 2 032 / 32 752 o. Toute autre taille, tout
+   message texte ou tout déchiffrement raté **ferme le lien**.
+4. **Trames utiles côté téléphone :**
+
+| Trame | Sens | Corps |
+|---|---|---|
+| `RegisterInbox` (0x04) | téléphone → nœud | 32 octets aléatoires, **nouveaux à chaque connexion**. C'est la destination de vos SURB. |
+| `Sphinx` (0x01) | téléphone → nœud | un paquet Sphinx (`sphinx::build_forward` ou `use_surb`). |
+| `Deliver` (0x08) | nœud → téléphone | `surb_id[16] ‖ charge utile finale` → `recover_reply(&recovery, payload)`. |
+| `DirectoryReq` (0x02) | téléphone → nœud | vide. |
+| `Directory` (0x03) | nœud → téléphone | CBOR `Signed<Directory>` → `directory::verify_directory`. |
+| `Padding` (0x00) | les deux | trafic de couverture du lien, à ignorer. |
+
+5. **Limite de débit :** 50 trames/s par lien, rafales de 200. Au-delà, le lien est fermé.
+6. **Rejets silencieux :** une PUT ou un FETCH mal signé, rejoué ou expiré ne reçoit **aucune**
+   réponse. Prévoyez un délai d'attente, puis une nouvelle tentative avec un nouveau nonce.
+7. **Réponses de FETCH :** une réponse par SURB fourni, au plus ~1 400 o de blobs chacune, avec
+   `more = true` s'il reste du courrier. Fournissez plusieurs SURB, ou refaites un FETCH.
+
+**En M1 (P4), le chemin ne compte qu'un saut** : `[gateway]` pour l'aller comme pour les SURB.
+Les chemins multi-nœuds arrivent en P5, sans changement de format.
+
 ## 5. Ce qui arrive ensuite
 
 | Phase | Pour vous |
 |---|---|
 | P2 — `core-v0.2.0` | Bindings uniffi + `.so` pour `arm64-v8a`, `armeabi-v7a`, `x86_64`, guide Gradle. |
-| P4 | Format des trames `RegisterInbox` / `DirectoryReq`, handshake Noise (`Noise_XX_25519_ChaChaPoly_BLAKE2s` + signature de la clé statique, écart E4), premier serveur joignable. |
+| P4 | **Fait** : voir §6. Premier serveur joignable (`harpochat-server run`). |
 | P5–P6 | Mesh à 5 nœuds, SUBSCRIBE / PUSH en temps réel. |

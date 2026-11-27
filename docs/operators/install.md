@@ -1,8 +1,8 @@
 # Installer un nœud HarpoChat
 
 > **Pour :** les bénévoles qui veulent faire tourner un nœud du mesh HarpoChat.
-> **État :** phase P3. Le nœud s'initialise et se vérifie, mais n'accepte pas encore de connexions
-> (cela arrive en phase P4). Le parrainage par jeton (`invite-node` / `join`) arrive en phase P7.
+> **État :** phase P4. Un nœud seul accepte les téléphones et garde leur courrier en RAM. Le mesh
+> multi-nœuds arrive en phase P5, le parrainage par jeton (`invite-node` / `join`) en phase P7.
 
 ## Ce que fait (et ne fait pas) un nœud
 
