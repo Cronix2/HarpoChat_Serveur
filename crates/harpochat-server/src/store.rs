@@ -226,10 +226,142 @@ impl SeenCache {
     }
 }
 
+/// One Bloom filter generation.
+struct Bloom {
+    bits: Vec<u64>,
+    m: u64,
+    count: usize,
+}
+
+impl Bloom {
+    fn new(m_bits: u64) -> Self {
+        Self {
+            bits: vec![0; m_bits.div_ceil(64) as usize],
+            m: m_bits,
+            count: 0,
+        }
+    }
+
+    fn test_and_set(&mut self, idx: &[u64], set: bool) -> bool {
+        let mut all = true;
+        for i in idx {
+            let (w, b) = ((i / 64) as usize, i % 64);
+            if self.bits[w] & (1 << b) == 0 {
+                all = false;
+                if set {
+                    self.bits[w] |= 1 << b;
+                }
+            }
+        }
+        if set && !all {
+            self.count += 1;
+        }
+        all
+    }
+}
+
+/// Sphinx replay tags in two Bloom generations (≈ 3.6 MiB each for one
+/// million tags at a false-positive rate of 10⁻⁶): a fixed memory cost,
+/// independent of traffic, where a hash set would grow to ~100 MiB. A false
+/// positive drops one legitimate packet (a lost packet, nothing worse). Bit
+/// positions are keyed per process, so nobody can aim tags at the same bits.
+/// When a generation is full it becomes the previous one: tags are then
+/// remembered for at least `capacity` further packets.
+pub struct ReplayFilter {
+    current: Bloom,
+    previous: Bloom,
+    capacity: usize,
+    k: u32,
+    hasher: std::collections::hash_map::RandomState,
+}
+
+impl ReplayFilter {
+    /// Filter sized for `capacity` tags per generation at false-positive rate `fp`.
+    pub fn new(capacity: usize, fp: f64) -> Self {
+        let n = capacity.max(1) as f64;
+        let ln2 = std::f64::consts::LN_2;
+        let m = (-(n * fp.clamp(1e-12, 0.5).ln()) / (ln2 * ln2))
+            .ceil()
+            .max(64.0) as u64;
+        let k = ((m as f64 / n) * ln2).round().clamp(1.0, 32.0) as u32;
+        Self {
+            current: Bloom::new(m),
+            previous: Bloom::new(m),
+            capacity: capacity.max(1),
+            k,
+            hasher: std::collections::hash_map::RandomState::new(),
+        }
+    }
+
+    fn indices(&self, tag: &[u8; 32]) -> Vec<u64> {
+        use std::hash::BuildHasher;
+        let h1 = self.hasher.hash_one((0u8, tag));
+        let h2 = self.hasher.hash_one((1u8, tag)) | 1;
+        let m = self.current.m;
+        (0..u64::from(self.k))
+            .map(|i| h1.wrapping_add(i.wrapping_mul(h2)) % m)
+            .collect()
+    }
+
+    /// Record `tag`; `false` if it was (probably) seen before.
+    pub fn insert_new(&mut self, tag: &[u8; 32]) -> bool {
+        if self.current.count >= self.capacity {
+            let m = self.current.m;
+            self.previous = std::mem::replace(&mut self.current, Bloom::new(m));
+        }
+        let idx = self.indices(tag);
+        if self.previous.test_and_set(&idx, false) {
+            return false;
+        }
+        !self.current.test_and_set(&idx, true)
+    }
+
+    /// Memory held by the bit arrays.
+    pub fn bytes(&self) -> usize {
+        (self.current.bits.len() + self.previous.bits.len()) * 8
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Limits;
+
+    #[test]
+    fn replay_filter_detects_replays_with_bounded_memory() {
+        let mut f = ReplayFilter::new(1_000_000, 1e-6);
+        assert!(f.bytes() < 8 * 1024 * 1024, "{}", f.bytes());
+        let tag = |i: u32| {
+            let mut t = [0u8; 32];
+            t[..4].copy_from_slice(&i.to_be_bytes());
+            harpochat_core::hash::h(&[&t])
+        };
+        for i in 0..20_000 {
+            assert!(f.insert_new(&tag(i)), "false positive at {i}");
+        }
+        for i in 0..20_000 {
+            assert!(!f.insert_new(&tag(i)), "replay {i} missed");
+        }
+    }
+
+    #[test]
+    fn replay_filter_rotates_when_full() {
+        let mut f = ReplayFilter::new(100, 1e-4);
+        let tag = |i: u32| harpochat_core::hash::h(&[&i.to_be_bytes()]);
+        for i in 0..100 {
+            assert!(f.insert_new(&tag(i)));
+        }
+        // Full: the next generation starts, old tags are still remembered…
+        for i in 100..150 {
+            assert!(f.insert_new(&tag(i)));
+        }
+        assert!(!f.insert_new(&tag(5)));
+        // …until a second rotation forgets them.
+        for i in 150..300 {
+            f.insert_new(&tag(i));
+        }
+        assert!(f.insert_new(&tag(5)));
+    }
 
     const T0: u64 = 1_800_000_000;
     const BOX: [u8; 32] = [1; 32];

@@ -2,6 +2,7 @@
 //! A loaded node: configuration, long-term keys, and the in-RAM Sphinx key.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use harpochat_core::descriptor::{NodeDescriptor, VERSION};
 use harpochat_core::directory::{verify_entry, DirectoryEntry, Revoke, Vouch};
@@ -15,6 +16,64 @@ use crate::keystore::{self, KeyStoreError, NodeKeys};
 pub const DESCRIPTOR_TTL_SECS: u64 = 24 * 3600;
 /// Sphinx key rotation period (spec §13: 7 days).
 pub const SPHINX_KEY_PERIOD_SECS: u64 = 7 * 86_400;
+
+fn epoch_of(now_unix_secs: u64) -> u32 {
+    u32::try_from(now_unix_secs / SPHINX_KEY_PERIOD_SECS).unwrap_or(u32::MAX)
+}
+
+struct KeyPair {
+    current: (X25519Secret, u32),
+    previous: Option<(X25519Secret, u32)>,
+}
+
+/// The node's Sphinx keys, RAM only (spec §13): a new key every 7 days, the
+/// previous one still accepted for one more period so packets and SURBs
+/// built just before a rotation still go through. Older keys are erased:
+/// recorded traffic can no longer be unwrapped with them.
+pub struct SphinxKeys(RwLock<KeyPair>);
+
+impl std::fmt::Debug for SphinxKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SphinxKeys(<redacted>)")
+    }
+}
+
+impl SphinxKeys {
+    /// A fresh key for the period containing `now`.
+    pub fn new(now_unix_secs: u64) -> Self {
+        Self(RwLock::new(KeyPair {
+            current: (X25519Secret::generate(), epoch_of(now_unix_secs)),
+            previous: None,
+        }))
+    }
+
+    /// Public half and epoch of the current key (announced in descriptors).
+    pub fn current_public(&self) -> ([u8; 32], u32) {
+        let k = self.0.read().expect("sphinx keys");
+        (k.current.0.public(), k.current.1)
+    }
+
+    /// Keys a packet may be built for, current first, with their epochs.
+    pub fn secrets(&self) -> Vec<(X25519Secret, u32)> {
+        let k = self.0.read().expect("sphinx keys");
+        std::iter::once(k.current.clone())
+            .chain(k.previous.clone())
+            .collect()
+    }
+
+    /// Rotate if a new period has started; `true` if it did.
+    pub fn rotate_if_due(&self, now_unix_secs: u64) -> bool {
+        let epoch = epoch_of(now_unix_secs);
+        let mut k = self.0.write().expect("sphinx keys");
+        if epoch <= k.current.1 {
+            return false;
+        }
+        let old = std::mem::replace(&mut k.current, (X25519Secret::generate(), epoch));
+        // Keep the previous key only if it is the period just before.
+        k.previous = (old.1 + 1 == epoch).then_some(old);
+        true
+    }
+}
 
 /// Why a node could not be loaded.
 #[derive(Debug)]
@@ -46,10 +105,8 @@ pub struct Node {
     pub config: Config,
     /// Long-term keys.
     pub keys: NodeKeys,
-    /// Current Sphinx key, RAM only.
-    pub sphinx: X25519Secret,
-    /// Rotation counter of the Sphinx key.
-    pub sphinx_epoch: u32,
+    /// Sphinx keys, RAM only, rotated weekly.
+    pub sphinx: Arc<SphinxKeys>,
     /// Data directory, when loaded from disk (the node then persists its
     /// sponsorship records there).
     pub dir: Option<PathBuf>,
@@ -72,8 +129,7 @@ impl Node {
         Ok(Self {
             config,
             keys,
-            sphinx: X25519Secret::generate(),
-            sphinx_epoch: u32::try_from(now_unix_secs / SPHINX_KEY_PERIOD_SECS).unwrap_or(u32::MAX),
+            sphinx: Arc::new(SphinxKeys::new(now_unix_secs)),
             dir: None,
             chain,
             revocations,
@@ -132,14 +188,15 @@ impl Node {
         Ok(roots)
     }
 
-    /// Freshly signed descriptor.
+    /// Freshly signed descriptor, announcing the current Sphinx key.
     pub fn descriptor(&self, now_unix_secs: u64) -> Signed<NodeDescriptor> {
+        let (sphinx_pub, sphinx_epoch) = self.sphinx.current_public();
         let d = NodeDescriptor {
             v: VERSION,
             id_pub: self.keys.identity.public(),
             noise_pub: self.keys.noise.public(),
-            sphinx_pub: self.sphinx.public(),
-            sphinx_key_epoch: self.sphinx_epoch,
+            sphinx_pub,
+            sphinx_key_epoch: sphinx_epoch,
             roles: self.config.node.roles.clone(),
             endpoints: self.config.node.public_endpoints.clone(),
             layer: self.config.node.layer,
@@ -177,7 +234,7 @@ mod tests {
         assert_eq!(harpochat_core::descriptor::validate(&d, NOW), Ok(()));
         assert_eq!(d.id_pub, n.keys.identity.public());
         assert_eq!(d.noise_pub, n.keys.noise.public());
-        assert_eq!(d.sphinx_pub, n.sphinx.public());
+        assert_eq!(d.sphinx_pub, n.sphinx.current_public().0);
         assert_eq!(d.valid_until, NOW + DESCRIPTOR_TTL_SECS);
     }
 
@@ -224,8 +281,28 @@ mod tests {
     }
 
     #[test]
+    fn sphinx_keys_rotate_weekly_keeping_one() {
+        let keys = SphinxKeys::new(NOW);
+        let (k0, e0) = keys.current_public();
+        assert!(!keys.rotate_if_due(NOW + 60));
+        let next = (u64::from(e0) + 1) * SPHINX_KEY_PERIOD_SECS;
+        assert!(keys.rotate_if_due(next));
+        let (k1, e1) = keys.current_public();
+        assert_eq!(e1, e0 + 1);
+        assert_ne!(k0, k1);
+        let pubs: Vec<[u8; 32]> = keys.secrets().iter().map(|(s, _)| s.public()).collect();
+        assert_eq!(pubs, vec![k1, k0]);
+        // Two periods later the old key is gone.
+        assert!(keys.rotate_if_due(next + SPHINX_KEY_PERIOD_SECS));
+        assert!(!keys.secrets().iter().any(|(s, _)| s.public() == k0));
+        // After a long sleep no stale previous key is kept.
+        assert!(keys.rotate_if_due(next + 10 * SPHINX_KEY_PERIOD_SECS));
+        assert_eq!(keys.secrets().len(), 1);
+    }
+
+    #[test]
     fn sphinx_key_epoch_is_weekly() {
         let n = node(true, false).unwrap();
-        assert_eq!(n.sphinx_epoch, (NOW / (7 * 86_400)) as u32);
+        assert_eq!(n.sphinx.current_public().1, (NOW / (7 * 86_400)) as u32);
     }
 }

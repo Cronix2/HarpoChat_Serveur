@@ -13,20 +13,20 @@ use std::time::Duration;
 
 use harpochat_core::descriptor::node_address;
 use harpochat_core::envelope;
-use harpochat_core::keys::X25519Secret;
 use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
 use harpochat_core::sphinx::{self, Processed, LOCAL_DELIVERY};
 use tokio::sync::mpsc;
 
 use crate::cover::LoopTracker;
+use crate::node::SphinxKeys;
 use crate::peers::Peers;
 use crate::service::MailboxService;
-use crate::store::SeenCache;
+use crate::store::ReplayFilter;
 
-/// Replay tags are remembered for a Sphinx key period (7 days)…
-const REPLAY_WINDOW_SECS: u64 = 7 * 86_400;
-/// …bounded to this many tags per generation (2 × 32 B × 1 M ≈ 64 MiB max).
-const REPLAY_MAX_ENTRIES: usize = 1_000_000;
+/// Replay tags remembered per Sphinx key and generation (two generations).
+const REPLAY_PER_GENERATION: usize = 1_000_000;
+/// False-positive rate of the replay filter (a legitimate packet dropped).
+const REPLAY_FALSE_POSITIVE: f64 = 1e-6;
 
 /// Clock returning unix seconds (injectable for tests).
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -101,13 +101,16 @@ pub struct Counters {
     pub drops_sent: AtomicU64,
     /// Subscription pushes (PUSH or NOTIFY) sent.
     pub pushes: AtomicU64,
+    /// Connections closed at once because a cap was reached.
+    pub links_refused: AtomicU64,
 }
 
 /// The routing core of a node.
 pub struct Router {
-    sphinx: X25519Secret,
+    sphinx: Arc<SphinxKeys>,
     own_addr: [u8; 32],
-    replay: Mutex<SeenCache>,
+    /// One replay filter per live Sphinx key epoch: tags die with their key.
+    replay: Mutex<HashMap<u32, ReplayFilter>>,
     service: Mutex<MailboxService>,
     peers: Arc<Peers>,
     /// Connected phones.
@@ -123,7 +126,7 @@ impl Router {
     /// New router for a node.
     pub fn new(
         id_pub: &[u8; 32],
-        sphinx: X25519Secret,
+        sphinx: Arc<SphinxKeys>,
         service: MailboxService,
         peers: Arc<Peers>,
         clock: Clock,
@@ -131,7 +134,7 @@ impl Router {
         Self {
             sphinx,
             own_addr: node_address(id_pub),
-            replay: Mutex::new(SeenCache::new(REPLAY_WINDOW_SECS, REPLAY_MAX_ENTRIES)),
+            replay: Mutex::new(HashMap::new()),
             service: Mutex::new(service),
             peers,
             inboxes: Arc::new(Inboxes::default()),
@@ -157,14 +160,40 @@ impl Router {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Rotate the Sphinx key if a new period started (spec §13); replay
+    /// filters of keys no longer accepted are freed.
+    pub fn rotate_keys(&self, now: u64) -> bool {
+        if !self.sphinx.rotate_if_due(now) {
+            return false;
+        }
+        let live: Vec<u32> = self.sphinx.secrets().iter().map(|(_, e)| *e).collect();
+        self.replay
+            .lock()
+            .expect("replay")
+            .retain(|e, _| live.contains(e));
+        true
+    }
+
     /// Process one incoming Sphinx packet. Must run inside a tokio runtime.
     pub fn submit(self: &Arc<Self>, packet: Vec<u8>) {
         self.counters.packets_in.fetch_add(1, Ordering::Relaxed);
         let now = self.now();
-        let Ok((tag, out)) = sphinx::process(&packet, &self.sphinx) else {
+        let found = self
+            .sphinx
+            .secrets()
+            .into_iter()
+            .find_map(|(secret, epoch)| sphinx::process(&packet, &secret).ok().map(|r| (epoch, r)));
+        let Some((epoch, (tag, out))) = found else {
             return self.drop_packet();
         };
-        if !self.replay.lock().expect("replay").insert_new(tag, now) {
+        let fresh = self
+            .replay
+            .lock()
+            .expect("replay")
+            .entry(epoch)
+            .or_insert_with(|| ReplayFilter::new(REPLAY_PER_GENERATION, REPLAY_FALSE_POSITIVE))
+            .insert_new(&tag);
+        if !fresh {
             return self.drop_packet();
         }
         match out {
@@ -256,19 +285,53 @@ mod tests {
 
     fn fixture() -> Fixture {
         let id = SigningKey::generate();
-        let sk = X25519Secret::generate();
+        let keys = Arc::new(SphinxKeys::new(NOW));
         let hop = Hop {
             id_pub: id.public(),
-            sphinx_pub: sk.public(),
+            sphinx_pub: keys.current_public().0,
         };
         let router = Arc::new(Router::new(
             &id.public(),
-            sk,
+            keys,
             MailboxService::new(&Limits::default()),
             Arc::new(Peers::none()),
             Arc::new(|| NOW),
         ));
         Fixture { router, hop }
+    }
+
+    fn drop_packet_to(hop: Hop) -> Vec<u8> {
+        build_forward(
+            &envelope::encode(&Message::Drop),
+            &[hop],
+            LOCAL_DELIVERY,
+            &[0],
+            SizeClass::Small,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn replay_after_rotation_refused() {
+        let f = fixture();
+        let dropped = || f.router.counters.packets_dropped.load(Ordering::Relaxed);
+        let pkt = drop_packet_to(f.hop);
+        f.router.submit(pkt.clone());
+        assert_eq!(dropped(), 0);
+        // New week: the old key is still accepted, its replay tags remembered.
+        let week = crate::node::SPHINX_KEY_PERIOD_SECS;
+        assert!(f.router.rotate_keys(NOW + week));
+        f.router.submit(pkt);
+        assert_eq!(dropped(), 1, "replay across a rotation");
+        f.router.submit(drop_packet_to(f.hop));
+        assert_eq!(dropped(), 1, "packet built for last week's key accepted");
+        // Two weeks: the old key is erased, its packets undecryptable.
+        assert!(f.router.rotate_keys(NOW + 2 * week));
+        f.router.submit(drop_packet_to(f.hop));
+        assert_eq!(dropped(), 2);
+        // The erased key's replay filter is freed with it.
+        assert!(f.router.replay.lock().unwrap().is_empty());
     }
 
     fn keys() -> MailboxKeys {

@@ -258,6 +258,8 @@ pub struct Limits {
     pub global_ram_bytes: u64,
     /// Blob lifetime (spec §7.3: 7 days, the maximum).
     pub blob_ttl_secs: u64,
+    /// Simultaneous links (phones and nodes); beyond, connections are closed.
+    pub max_links: u32,
 }
 
 impl Default for Limits {
@@ -267,6 +269,7 @@ impl Default for Limits {
             mailbox_max_bytes: 50 * 1024 * 1024,
             global_ram_bytes: 512 * 1024 * 1024,
             blob_ttl_secs: MAX_BLOB_TTL_SECS,
+            max_links: 4096,
         }
     }
 }
@@ -384,7 +387,11 @@ impl Config {
             check_endpoints("roots", &r.endpoints, false)?;
         }
         let l = &self.limits;
-        if l.mailbox_max_blobs == 0 || l.mailbox_max_bytes == 0 || l.global_ram_bytes == 0 {
+        if l.mailbox_max_blobs == 0
+            || l.mailbox_max_bytes == 0
+            || l.global_ram_bytes == 0
+            || l.max_links == 0
+        {
             return Err(invalid("limits", "les limites doivent être non nulles"));
         }
         if l.blob_ttl_secs == 0 || l.blob_ttl_secs > MAX_BLOB_TTL_SECS {

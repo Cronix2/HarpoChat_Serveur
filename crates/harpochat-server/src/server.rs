@@ -50,6 +50,11 @@ const PHONE_BURST: usize = 16;
 const GOSSIP_QUEUE: usize = 256;
 /// Re-verification of the view (descriptor expiry).
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
+/// How often the node checks whether its Sphinx key is due for rotation.
+const ROTATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
+/// TLS + WebSocket + Noise handshakes in progress at once: beyond, new
+/// connections are closed at once (the accept loop never waits).
+pub const MAX_HANDSHAKES: usize = 256;
 /// Aggregated counters are logged this often (spec §10: totals only).
 const STATS_EVERY: Duration = Duration::from_secs(600);
 
@@ -227,6 +232,18 @@ impl Server {
             }));
         }
         {
+            let router = self.router.clone();
+            background.push(tokio::spawn(async move {
+                let mut tick = tokio::time::interval(ROTATE_CHECK_EVERY);
+                loop {
+                    tick.tick().await;
+                    if router.rotate_keys(router.now()) {
+                        tracing::info!("clé Sphinx renouvelée");
+                    }
+                }
+            }));
+        }
+        {
             let (router, membership, peers) = (
                 self.router.clone(),
                 self.membership.clone(),
@@ -247,6 +264,10 @@ impl Server {
             self.membership.clone(),
         )));
         let mut links = tokio::task::JoinSet::new();
+        let link_slots = Arc::new(tokio::sync::Semaphore::new(
+            self.node.config.limits.max_links as usize,
+        ));
+        let handshake_slots = Arc::new(tokio::sync::Semaphore::new(MAX_HANDSHAKES));
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
@@ -255,6 +276,14 @@ impl Server {
                 Some(_) = links.join_next(), if !links.is_empty() => {}
                 accepted = listener.accept() => {
                     let Ok((tcp, _addr)) = accepted else { continue };
+                    // Over the caps: close at once, without a word.
+                    let (Ok(link_slot), Ok(handshake_slot)) = (
+                        link_slots.clone().try_acquire_owned(),
+                        handshake_slots.clone().try_acquire_owned(),
+                    ) else {
+                        self.router.counters.links_refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    };
                     let _ = tcp.set_nodelay(true);
                     let ctx = LinkCtx {
                         node: self.node.clone(),
@@ -266,7 +295,8 @@ impl Server {
                     };
                     let tls = tls.clone();
                     links.spawn(async move {
-                        if let Err(e) = handle_link(tcp, tls, ctx).await {
+                        let _link_slot = link_slot;
+                        if let Err(e) = handle_link(tcp, tls, ctx, handshake_slot).await {
                             tracing::debug!("lien fermé : {e}");
                         }
                     });
@@ -296,6 +326,7 @@ async fn handle_link(
     tcp: tokio::net::TcpStream,
     tls: tokio_rustls::TlsAcceptor,
     ctx: LinkCtx,
+    handshake_slot: tokio::sync::OwnedSemaphorePermit,
 ) -> Result<(), NetError> {
     let LinkCtx {
         node,
@@ -307,6 +338,7 @@ async fn handle_link(
     } = ctx;
     let (mut reader, mut writer, peer) =
         net::accept(tcp, &tls, &node.keys.noise, &node.keys.identity).await?;
+    drop(handshake_slot);
     let is_node = peer.node_id.is_some_and(|id| peers.is_peer(&id));
     let cfg: &Cover = &node.config.cover;
     // Node links are shaped by the peer's own dialler; only the phone

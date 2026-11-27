@@ -38,13 +38,16 @@ struct Running {
 }
 
 async fn start(keys: NodeKeys) -> Running {
-    let mut config = Config::default();
+    start_with(keys, Config::default()).await
+}
+
+async fn start_with(keys: NodeKeys, mut config: Config) -> Running {
     config.node.root = true;
     config.node.public_endpoints = vec!["wss://127.0.0.1".into()];
     let node = Node::new(config, keys, now()).unwrap();
     let hop = Hop {
         id_pub: node.keys.identity.public(),
-        sphinx_pub: node.sphinx.public(),
+        sphinx_pub: node.sphinx.current_public().0,
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -166,5 +169,30 @@ async fn directory_request_returns_signed_self() {
     let nodes = verify_directory(&dir, &[node.hop.id_pub], now()).unwrap();
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].descriptor.sphinx_pub, node.hop.sphinx_pub);
+    stop(node).await;
+}
+
+#[tokio::test]
+async fn link_cap_refuses_excess() {
+    let mut config = Config::default();
+    config.limits.max_links = 3;
+    let node = start_with(NodeKeys::generate(), config).await;
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        held.push(Client::connect(node.addr, node.hop).await.unwrap());
+    }
+    // Over the cap: closed at once, before any handshake.
+    assert!(Client::connect(node.addr, node.hop).await.is_err());
+    // A slot frees when a link ends; the node serves again.
+    drop(held.pop());
+    let mut ok = false;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if Client::connect(node.addr, node.hop).await.is_ok() {
+            ok = true;
+            break;
+        }
+    }
+    assert!(ok, "slot never freed");
     stop(node).await;
 }
