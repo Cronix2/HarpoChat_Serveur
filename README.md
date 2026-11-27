@@ -18,6 +18,10 @@ l'administrateur du nœud.
 | [`docs/SERVER_SPEC.md`](docs/SERVER_SPEC.md) | Contrat client ↔ serveur (exigences) |
 | [`docs/superpowers/specs/2026-11-26-harpochat-core-design.md`](docs/superpowers/specs/2026-11-26-harpochat-core-design.md) | Conception technique |
 | [`docs/superpowers/plans/`](docs/superpowers/plans/) | Plans d'implémentation par phase |
+| [`docs/architecture.md`](docs/architecture.md) | Architecture et garanties |
+| [`docs/jury/README.md`](docs/jury/README.md) | Dossier jury : promesses, preuves exécutables, démo, limites |
+| [`docs/operators/`](docs/operators/) | Installer, parrainer, faire tourner en service |
+| [`docs/android/`](docs/android/) | Intégration côté app Android, écarts à la spec |
 
 ## Organisation
 
@@ -41,7 +45,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## État
 
-Phases **P1** à **P5** terminées : noyau `harpochat-core`, binaire et releases signées, nœud joignable (M1), bindings Android, mesh multi-nœuds (M2). **P6** (trafic de couverture et temps réel, M3/M3b) et **P7** (parrainage par jeton, gossip, révocation, M4) en revue. Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
+Phases **P1** à **P5** terminées : noyau `harpochat-core`, binaire et releases signées, nœud joignable (M1), bindings Android, mesh multi-nœuds (M2). En revue : **P6** (trafic de couverture et temps réel, M3/M3b), **P7** (parrainage par jeton, gossip, révocation, M4) et **P8** (fuzzing, résistance à la charge, rotation des clés, audit des logs, builds reproductibles, services, M5).
+
+Démonstration en local, 5 nœuds : `scripts/demo-mesh.sh`. Dossier jury : [`docs/jury/`](docs/jury/README.md). Voir [`docs/architecture.md`](docs/architecture.md) et, pour l'app Android, [`docs/android/`](docs/android/).
 
 ## Licence
 

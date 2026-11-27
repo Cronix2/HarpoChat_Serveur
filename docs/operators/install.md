@@ -1,9 +1,9 @@
 # Installer un nœud HarpoChat
 
 > **Pour :** les bénévoles qui veulent faire tourner un nœud du mesh HarpoChat.
-> **État :** phase P5. Les nœuds forment un mesh (pairs déclarés dans `[[peers]]`) et relaient des
-> paquets Sphinx multi-sauts. Le parrainage par jeton (`invite-node` / `join`) et la découverte
-> automatique arrivent en phase P7.
+> **État :** phases P1 à P8. Un nœud rejoint le mesh avec un jeton de parrainage (`join`), découvre
+> les autres par gossip et émet du trafic de couverture. Pour le faire tourner en service, voir
+> [`services.md`](services.md).
 
 ## Ce que fait (et ne fait pas) un nœud
 
@@ -38,6 +38,19 @@ sha256sum --ignore-missing -c SHA256SUMS      # Windows : Get-FileHash <fichier>
 ```
 
 Sous Linux : `chmod +x harpochat-server-linux-*`.
+
+**Aller plus loin : recompiler soi-même.** Les binaires Linux sont **reproductibles**. Recompilé à
+partir du code source du tag, on obtient exactement les mêmes octets, ce qui prouve que le binaire
+publié contient ce code et rien d'autre. Un script fait les deux vérifications, signature puis
+recompilation :
+
+```bash
+scripts/verify-release.sh v0.2.0
+# OK : le binaire publié est exactement celui que produit le code source du tag v0.2.0.
+```
+
+La CI recompile deux fois à chaque modification, depuis deux répertoires différents, et exige le même
+SHA-256 (workflow *Reproducible build*).
 
 ## 2. Initialiser
 

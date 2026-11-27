@@ -76,6 +76,8 @@ pub enum Command {
         #[arg(long = "endpoint")]
         endpoints: Vec<String>,
     },
+    /// Interroge le nœud en marche comme le ferait l'app : annuaire signé, vérifié.
+    Status,
     /// Révoque un nœud que ce nœud a parrainé (ou n'importe lequel, depuis une racine).
     Revoke {
         /// Identité du nœud (64 caractères hexadécimaux).
@@ -122,6 +124,7 @@ pub fn run_cli(cli: Cli) -> i32 {
         Command::InviteNode { hours } => invite_node(&dir, hours),
         Command::Join { token, endpoints } => join(&dir, &token, endpoints),
         Command::Revoke { node_id } => revoke(&dir, &node_id),
+        Command::Status => status(&dir),
     }
 }
 
@@ -184,6 +187,87 @@ fn join(dir: &Path, token: &str, endpoints: Vec<String>) -> i32 {
             fail(code, e)
         }
     }
+}
+
+fn status(dir: &Path) -> i32 {
+    use harpochat_core::directory::{verify_directory, Directory};
+    use harpochat_core::link::{FrameKind, LinkFrame, SizeClass};
+    let node = match load(dir) {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    let id = node.keys.identity.public();
+    let roots = node.trusted_roots().unwrap_or_default();
+    let addr = node.config.listen.addr.replace("0.0.0.0", "127.0.0.1");
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => return fail(EXIT_RUNTIME, format!("runtime : {e}")),
+    };
+    let answer = rt.block_on(async {
+        let sock = tokio::net::lookup_host(&addr).await.ok()?.next()?;
+        // An anonymous link, exactly like a phone's.
+        let (mut r, mut w, _) = crate::net::connect(
+            sock,
+            &harpochat_core::keys::X25519Secret::generate(),
+            None,
+            Some(id),
+        )
+        .await
+        .ok()?;
+        w.send(
+            &LinkFrame {
+                kind: FrameKind::DirectoryReq,
+                body: Vec::new(),
+            },
+            SizeClass::Small,
+        )
+        .await
+        .ok()?;
+        let wait = async {
+            loop {
+                let (_, f) = r.recv().await.ok()?;
+                if f.kind == FrameKind::Directory {
+                    return Some(f.body);
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+            .await
+            .ok()?
+    });
+    let Some(body) = answer else {
+        return fail(EXIT_RUNTIME, format!("le nœud ne répond pas sur {addr}"));
+    };
+    let nodes = cbor::from_slice::<Signed<Directory>>(&body, 1 << 20)
+        .ok()
+        .and_then(|d| verify_directory(&d, &roots, now()).ok());
+    let Some(nodes) = nodes else {
+        return fail(EXIT_RUNTIME, "annuaire invalide");
+    };
+    println!(
+        "nœud {} : {} nœud(s) vérifié(s) jusqu'aux racines",
+        &hex::encode(id)[..16],
+        nodes.len()
+    );
+    for n in &nodes {
+        let d = &n.descriptor;
+        let sponsor = n
+            .sponsor
+            .map(|s| format!("parrain {}", &hex::encode(s)[..16]))
+            .unwrap_or_else(|| "racine".into());
+        let me = if d.id_pub == id { " (ce nœud)" } else { "" };
+        println!(
+            "  {}  {:<28} {}{}",
+            &hex::encode(d.id_pub)[..16],
+            d.endpoints.first().map(String::as_str).unwrap_or("-"),
+            sponsor,
+            me
+        );
+    }
+    EXIT_OK
 }
 
 fn revoke(dir: &Path, node_id: &str) -> i32 {

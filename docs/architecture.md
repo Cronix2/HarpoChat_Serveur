@@ -59,7 +59,29 @@ crates/harpochat-server  binaire du nœud
   router                        couche Sphinx : anti-rejeu, délais, transmission, remise
   service, store                boîtes aux lettres en RAM, abonnements SURB (PUSH / NOTIFY)
   cover                         façonnage des liens, loops et drops du nœud, mesure des pertes
+  fuzzing                       corps des cibles de fuzzing (fuzz/, CI)
+  winservice                    service Windows (packaging/systemd pour Linux)
 ```
+
+```text
+fuzz/        cibles cargo-fuzz (nightly), hors workspace
+packaging/   unité systemd durcie
+scripts/     build reproductible, vérification d'une release, démonstration
+```
+
+### Durcissement (P8)
+
+- **Entrées hostiles :** dix cibles de fuzzing couvrent tout ce qui arrive du réseau : trames,
+  enveloppes, Sphinx, Noise, annuaires, jetons, demandes d'admission, service de boîtes,
+  configuration. Elles tournent sous libFuzzer en CI, et sur stable à chaque build.
+- **Charge :** plafond de liens et de poignées de main. Au-delà, la connexion est fermée tout de
+  suite, et la boucle d'acceptation n'attend jamais.
+- **Anti-rejeu :** un filtre de Bloom à clé secrète par clé Sphinx, de taille fixe (environ 7 Mo).
+  Un faux positif ne coûte qu'un paquet perdu.
+- **Clés Sphinx :** renouvelées chaque semaine. L'ancienne est acceptée une semaine de plus, puis
+  effacée.
+- **Logs :** totaux agrégés seulement, vérifiés par un test boîte noire.
+- **Binaire :** build reproductible (CI : deux compilations, même SHA-256) et signature Sigstore.
 
 ### Admission par parrainage (P7)
 
@@ -108,4 +130,4 @@ produite pour un usage ne peut jamais être rejouée pour un autre.
 | P5 | Mesh Sphinx, SURB, 5 nœuds (M2) | **terminé** |
 | P6 | Trafic de couverture, temps réel (M3, M3b) | **terminé, en revue** |
 | P7 | Gossip, parrainage `invite-node`/`join`, révocation (M4) | **terminé, en revue** |
-| P8 | Fuzzing, audit des logs, builds reproductibles (M5) | à faire |
+| P8 | Fuzzing, audit des logs, builds reproductibles, services, dossier jury (M5) | **terminé, en revue** |
