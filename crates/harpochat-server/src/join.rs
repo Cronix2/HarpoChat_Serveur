@@ -86,7 +86,7 @@ impl std::error::Error for JoinError {}
 async fn ask(hp: &str, keys: &NodeKeys, sponsor: [u8; 32], req: &[u8]) -> Option<JoinResponse> {
     let addr = tokio::net::lookup_host(hp).await.ok()?.next()?;
     let (mut reader, mut writer, _) =
-        net::connect(addr, &keys.noise, Some(&keys.identity), Some(sponsor))
+        net::connect_named(addr, hp, &keys.noise, Some(&keys.identity), Some(sponsor))
             .await
             .ok()?;
     let class = if req.len() <= SizeClass::Small.max_body_len() {

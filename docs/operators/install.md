@@ -138,6 +138,12 @@ d'IP, d'identifiant de boîte aux lettres, de taille ni d'horodatage de paquet (
 - Derrière une box, redirigez le port TCP 443 vers la machine.
 - Les certificats TLS auto-signés sont acceptés : l'authentification réelle d'un nœud passe par sa
   clé (Noise), pas par le certificat.
+- **Derrière un reverse proxy** (Nginx Proxy Manager, Caddy…) déjà installé sur le port 443 : faites
+  écouter le nœud ailleurs (`addr = "0.0.0.0:8443"`), gardez `public_endpoints =
+  ["wss://votre.domaine:443"]`, et dans le proxy : schéma `https` vers `IP-locale:8443`, WebSocket
+  activé, certificat Let's Encrypt. Les nœuds et les téléphones présentent le nom de l'endpoint
+  (SNI et `Host`), le proxy peut donc router par nom. Il ne voit que du chiffré : Noise passe dans
+  le WebSocket.
 
 ## 5. Trafic de couverture et bande passante
 

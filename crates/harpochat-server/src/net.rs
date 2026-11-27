@@ -249,22 +249,55 @@ pub async fn accept(
         .map_err(|_| NetError::Timeout)?
 }
 
-/// Dial a node. `identity` is `None` for a phone (anonymous). If
-/// `expected_node` is set, the peer must prove exactly that identity.
+/// Dial a node by address. `identity` is `None` for a phone (anonymous).
+/// If `expected_node` is set, the peer must prove exactly that identity.
 pub async fn connect(
     addr: SocketAddr,
     noise_static: &X25519Secret,
     identity: Option<&SigningKey>,
     expected_node: Option<[u8; 32]>,
 ) -> Result<(LinkReader, LinkWriter, Peer), NetError> {
+    connect_named(
+        addr,
+        &addr.to_string(),
+        noise_static,
+        identity,
+        expected_node,
+    )
+    .await
+}
+
+/// SNI host of a `host:port` string (`[v6]:port` accepted).
+fn sni_host(host_port: &str) -> &str {
+    let host = match host_port.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host_port,
+    };
+    host.trim_start_matches('[').trim_end_matches(']')
+}
+
+/// Like [`connect`], but presents `host_port` (an endpoint's `host:port`)
+/// as TLS SNI and WebSocket `Host`, so the link also works through a
+/// reverse proxy that routes by name. The proxy is not trusted: the peer
+/// is still authenticated by the Noise handshake only.
+pub async fn connect_named(
+    addr: SocketAddr,
+    host_port: &str,
+    noise_static: &X25519Secret,
+    identity: Option<&SigningKey>,
+    expected_node: Option<[u8; 32]>,
+) -> Result<(LinkReader, LinkWriter, Peer), NetError> {
+    let name = ServerName::try_from(sni_host(host_port).to_owned())
+        .or_else(|_| ServerName::try_from("harpochat"))
+        .expect("static name");
+    let url = format!("wss://{host_port}/");
     let hs = Handshake::initiator(noise_static, identity).map_err(NetError::Protocol)?;
     let connector = tls_connector()?;
     let fut = async {
         let tcp = TcpStream::connect(addr).await.map_err(NetError::Io)?;
-        let name = ServerName::try_from("harpochat").expect("static name");
         let tls = connector.connect(name, tcp).await.map_err(NetError::Io)?;
         let (ws, _) =
-            tokio_tungstenite::client_async_with_config("wss://harpochat/", tls, Some(ws_config()))
+            tokio_tungstenite::client_async_with_config(url.as_str(), tls, Some(ws_config()))
                 .await?;
         let (mut stream, mut sink) = halves(ws);
         let (t, peer) = noise_handshake(&mut stream, &mut sink, hs, true).await?;
@@ -361,6 +394,14 @@ impl RateLimit {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sni_host_strips_port_and_brackets() {
+        assert_eq!(super::sni_host("harpo.cronix.fr:443"), "harpo.cronix.fr");
+        assert_eq!(super::sni_host("[::1]:8443"), "::1");
+        assert_eq!(super::sni_host("127.0.0.1:1"), "127.0.0.1");
+        assert_eq!(super::sni_host("host"), "host");
+    }
+
     use super::*;
     use harpochat_core::link::FrameKind;
     use tokio::net::TcpListener;
