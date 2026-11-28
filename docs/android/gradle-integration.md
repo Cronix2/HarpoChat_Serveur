@@ -8,9 +8,8 @@
 
 `harpochat-core-android.zip` est publié sur la page
 [Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases), avec les binaires du serveur :
-dans la pré-release **`latest`**, reconstruite à chaque modification de `main`, et dans chaque
-version numérotée **`vX.Y.Z`**. Prenez une version numérotée pour une build de l'app, `latest` pour
-suivre le développement. Sur une PR, le workflow **Android core** fournit aussi l'archive en
+dans chaque version numérotée **`vX.Y.Z`**, publiée automatiquement à chaque fusion dans `main`
+(la pré-release `latest` n'existe plus). Sur une PR, le workflow **Android core** fournit aussi l'archive en
 artefact. Contenu de l'archive :
 
 ```text

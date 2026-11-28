@@ -1,7 +1,7 @@
 # `harpochat-core` v0.1 — guide d'intégration côté Android
 
 > **Pour :** l'équipe Android.
-> **De :** l'équipe serveur. **Date :** 2026-11-26. **Version du noyau :** celle de la release (page Releases : `latest`, ou `vX.Y.Z`).
+> **De :** l'équipe serveur. **Date :** 2026-11-26. **Version du noyau :** celle de la release `vX.Y.Z` (page Releases ; une par fusion dans `main`).
 > **Contrat de référence :** `docs/SERVER_SPEC.md` v0.2. Les écarts proposés sont dans [`spec-deltas.md`](spec-deltas.md).
 
 ## 1. Ce qui change pour vous, en bref

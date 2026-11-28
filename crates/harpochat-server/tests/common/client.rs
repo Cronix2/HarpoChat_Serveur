@@ -110,7 +110,9 @@ impl Client {
         })
         .await
         .ok()?;
-        let (_, frame) = self.recv_real(Duration::from_secs(5)).await?;
+        // The phone downlink is a Poisson stream (1 packet/s on average): the
+        // reply waits an exponential time for its slot, so leave a margin.
+        let (_, frame) = self.recv_real(Duration::from_secs(15)).await?;
         assert_eq!(frame.kind, FrameKind::Deliver);
         assert_eq!(frame.body[..16], surb_id);
         let plain = sphinx::recover_reply(&rec, &frame.body[16..]).ok()?;

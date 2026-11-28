@@ -22,13 +22,13 @@ required-features = ["cli"]
 cli = ["uniffi/cli"]
 
 [dependencies]
-harpochat-core = { path = "../harpochat-core", version = "0.1.0" }
+harpochat-core = { path = "../harpochat-core", version = "0.2.0" }
 uniffi = { workspace = true }
 thiserror = { workspace = true }
 vodozemac = { workspace = true }
 
 [dev-dependencies]
-harpochat-server = { path = "../harpochat-server", version = "0.1.0" }
+harpochat-server = { path = "../harpochat-server", version = "0.2.0" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

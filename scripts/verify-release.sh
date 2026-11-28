@@ -7,7 +7,7 @@
 #      x86_64 binary, byte for byte.
 # Needs: git, gh (or curl), cosign, rustup, python3 -m pip install ziglang,
 # cargo install cargo-zigbuild.
-#   scripts/verify-release.sh v0.2.0      # or: latest
+#   scripts/verify-release.sh v0.2.0
 set -euo pipefail
 tag="${1:?usage: verify-release.sh <tag>}"
 repo="${REPO:-Cronix2/HarpoChat_Serveur}"
