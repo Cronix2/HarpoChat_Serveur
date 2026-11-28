@@ -26,6 +26,9 @@ use harpochat_core::{cbor, sphinx, CoreError};
 
 uniffi::setup_scaffolding!();
 
+pub mod olm;
+pub use olm::{OlmAccount, OlmEncrypted, OlmInbound, OlmSession};
+
 /// Errors returned to Kotlin.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum FfiError {

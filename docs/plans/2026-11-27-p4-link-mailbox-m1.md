@@ -1,7 +1,5 @@
 # P4 — Lien WSS + Noise, boîte aux lettres en RAM, un saut (M1) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** A running node that phones reach over WSS + Noise, holding E2EE blobs in RAM mailboxes: two test clients exchange a blob through one node (PUT, then FETCH answered through a SURB, then ACK), and a restart wipes everything (spec §15, M1).
 
 **Architecture:** `harpochat-core` gains a pure Noise XX state machine with identity binding (`noise.rs`, design E4) and a `Deliver` link frame. `harpochat-server` gains: `store` (RAM mailboxes, quotas, TTL, nonce/replay caches), `service` (mailbox semantics over `envelope::Message`), `router` (Sphinx processing, delays, local delivery), `net` (TLS in-RAM self-signed cert, WebSocket, Noise link, per-link rate limit), `server` (accept loop, shared state, sweeper). In M1 every route is the single local node; forwarding to other nodes comes in P5.
@@ -17,7 +15,7 @@
 - Mailbox rejects are **silent** (no response), so a stranger learns nothing (spec §8 "pas d'oracle").
 - RAM only. TLS certificate and key are generated in RAM at each start (Noise is the real authentication).
 - Times come from one `Clock` (`now_unix_secs()`), injectable in tests.
-- Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; branch `feat/p4-link-mailbox`.
+- Conventional commits; branch `feat/p4-link-mailbox`.
 
 ## Review Focus
 

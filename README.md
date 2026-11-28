@@ -16,8 +16,8 @@ l'administrateur du nœud.
 | Document | Contenu |
 |---|---|
 | [`docs/SERVER_SPEC.md`](docs/SERVER_SPEC.md) | Contrat client ↔ serveur (exigences) |
-| [`docs/superpowers/specs/2026-11-26-harpochat-core-design.md`](docs/superpowers/specs/2026-11-26-harpochat-core-design.md) | Conception technique |
-| [`docs/superpowers/plans/`](docs/superpowers/plans/) | Plans d'implémentation par phase |
+| [`docs/specs/2026-11-26-harpochat-core-design.md`](docs/specs/2026-11-26-harpochat-core-design.md) | Conception technique |
+| [`docs/plans/`](docs/plans/) | Plans d'implémentation par phase |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture et garanties |
 | [`docs/jury/README.md`](docs/jury/README.md) | Dossier jury : promesses, preuves exécutables, démo, limites |
 | [`docs/operators/`](docs/operators/) | Installer, parrainer, faire tourner en service |

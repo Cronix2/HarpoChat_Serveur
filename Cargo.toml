@@ -13,6 +13,7 @@ authors = ["HarpoChat contributors"]
 repository = "https://github.com/Cronix2/HarpoChat_Serveur"
 
 [workspace.dependencies]
+vodozemac = { version = "0.11", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 ciborium = "0.2"

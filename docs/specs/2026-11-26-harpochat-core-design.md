@@ -1,7 +1,7 @@
 # HarpoChat Server — conception technique
 
 > **Statut :** v1, 2026-11-26 — à valider par le porteur du projet.
-> **Source des exigences :** [`docs/SERVER_SPEC.md`](../../SERVER_SPEC.md) v0.2 (le *quoi*). Ce document décrit le *comment*.
+> **Source des exigences :** [`docs/SERVER_SPEC.md`](../SERVER_SPEC.md) v0.2 (le *quoi*). Ce document décrit le *comment*.
 > En cas de conflit, la spec gagne. Tout écart volontaire est listé au §9. Je ne modifie pas la spec
 > moi-même : les écarts sont transmis au porteur (et à l'instance Android) via `docs/android/`.
 >
@@ -199,7 +199,7 @@ Aucun log par paquet : un garde-fou de test vérifie l'absence de champs sensibl
 | **P7 — M4** | Gossip, `invite-node`/`join`/`revoke`, chaînes de parrainage, limites. | Un nœud rejoint avec un seul copier-coller. |
 | **P8 — M5** | Fuzzing (`cargo fuzz`), audit des logs, builds reproductibles, services systemd/Windows, docs opérateur et jury. | Fuzz 24 h sans crash ; build reproduit bit à bit. |
 
-Chaque phase a son propre plan d'implémentation (`docs/superpowers/plans/`). Le premier plan couvre P1.
+Chaque phase a son propre plan d'implémentation (`docs/plans/`). Le premier plan couvre P1.
 
 ## 8. Tests et qualité
 

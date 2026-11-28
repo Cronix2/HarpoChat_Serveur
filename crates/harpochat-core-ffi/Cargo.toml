@@ -25,6 +25,7 @@ cli = ["uniffi/cli"]
 harpochat-core = { path = "../harpochat-core", version = "0.1.0" }
 uniffi = { workspace = true }
 thiserror = { workspace = true }
+vodozemac = { workspace = true }
 
 [dev-dependencies]
 harpochat-server = { path = "../harpochat-server", version = "0.1.0" }

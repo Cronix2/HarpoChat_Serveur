@@ -1,6 +1,6 @@
 # Intégrer `harpochat-core` dans l'app Android (phase P2)
 
-> **Pour :** l'équipe (ou l'instance Claude Code) qui développe l'app Android HarpoChat.
+> **Pour :** l'équipe Android.
 > **De :** l'équipe serveur, 2026-11-27. À lire avec [`core-integration.md`](core-integration.md)
 > (sémantique, tailles, protocole de connexion).
 

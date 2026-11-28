@@ -6,7 +6,7 @@
 //! else: no network, no files, no clock (time is always a parameter), no
 //! `unsafe`.
 //!
-//! Contract: `docs/SERVER_SPEC.md`. Design: `docs/superpowers/specs/2026-11-26-harpochat-core-design.md`.
+//! Contract: `docs/SERVER_SPEC.md`. Design: `docs/specs/2026-11-26-harpochat-core-design.md`.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
