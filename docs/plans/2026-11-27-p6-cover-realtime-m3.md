@@ -1,7 +1,5 @@
 # P6 — Trafic de couverture et temps réel (M3 + M3b) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** (M3) A node's links emit frames at instants that do not depend on whether real traffic flows. Nodes emit their own Sphinx loops and drops, and they measure losses per neighbour with their loops. (M3b) A phone deposits SURBs with `SUBSCRIBE`; on each accepted `PUT` the mailbox pushes the blob (`PUSH`), or a `NOTIFY` when the blob does not fit, through one SURB. A pushed message arrives in < 2 s on a 5-node mesh.
 
 **Architecture:**
@@ -29,7 +27,7 @@
 - **Failures stay silent** (no answer to SUBSCRIBE, as before).
 - **Push is best-effort.** The blob stays stored until the ACK.
 - **No logs per packet.** Counters only.
-- Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; branch `feat/p6-p8` (single PR for P6–P8).
+- Conventional commits; branch `feat/p6-p8` (single PR for P6–P8).
 
 ## Review Focus
 

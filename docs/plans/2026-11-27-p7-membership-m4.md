@@ -1,7 +1,5 @@
 # P7 — Parrainage, gossip, révocation (M4) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** A new node joins the mesh with a single copy-paste. The sponsor runs `harpochat-server invite-node`; the new machine runs `harpochat-server join <token> --endpoint wss://…`. The node then appears, with its sponsorship chain, in every node's directory within a few seconds. Revoking it (`harpochat-server revoke <id>`) removes it, along with the nodes it sponsored after the revocation (spec §4.3, M4).
 
 **Architecture:**
@@ -41,7 +39,7 @@
 - **The joiner checks the response** before writing anything: `verify_entry(own descriptor, [vouch] + chain, roots received)`. On failure, no file is written.
 - **A directory always fits in a Large frame.** Entries are dropped from the end, never our own. Documented limit: about 50 nodes per directory. Pagination is left for later.
 - **Revocations stay local.** A node may only publish the revocations it has *received and verified*, plus those it signed. The core rule applies: direct sponsor or root.
-- Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; branch `feat/p6-p8`.
+- Conventional commits; branch `feat/p6-p8`.
 
 ## Review Focus
 

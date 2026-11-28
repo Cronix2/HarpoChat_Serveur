@@ -3,7 +3,6 @@
 **/*.rs.bk
 
 # Local scratch (agent workspaces)
-/.superpowers/
 
 # Editor / OS
 .vscode/

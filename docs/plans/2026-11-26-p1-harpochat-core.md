@@ -1,14 +1,12 @@
 # P1 — `harpochat-core` v0.1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Replace the legacy JSON relay with a pure-Rust protocol core (`harpochat-core`) holding every wire format shared by the server and the Android app, with frozen test vectors, ready to tag `core-v0.1.0`.
 
 **Architecture:** A single library crate with no I/O, no async, no implicit clock (time is always a parameter) and no `unsafe`. Each module owns one format: CBOR helpers, signed objects, envelopes (§8), link frames, descriptors/vouches/directory, node invites, bootstrap, mailbox derivation/auth, and a Sphinx façade over `sphinx-packet`. Randomness enters only through explicit parameters or `getrandom`, so every format can be pinned by deterministic test vectors.
 
 **Tech Stack:** Rust stable (pinned), `ciborium` + `serde` + `serde_bytes`, `ed25519-dalek` 3, `x25519-dalek` 3, `sphinx-packet` 0.8, `blake2` 0.11, `hkdf` 0.13 + `sha2` 0.11, `hmac` 0.13, `data-encoding`, `zeroize`, `getrandom`, `thiserror`; dev: `serde_json`, `hex`, `proptest`.
 
-**Spec:** [`docs/SERVER_SPEC.md`](../../SERVER_SPEC.md) v0.2 (contract) and [`docs/superpowers/specs/2026-11-26-harpochat-core-design.md`](../specs/2026-11-26-harpochat-core-design.md) (design). Read both before starting.
+**Spec:** [`docs/SERVER_SPEC.md`](../SERVER_SPEC.md) v0.2 (contract) and [`docs/specs/2026-11-26-harpochat-core-design.md`](../specs/2026-11-26-harpochat-core-design.md) (design). Read both before starting.
 
 ## Global Constraints
 
@@ -20,7 +18,7 @@
 - Size classes (design §5.9): Noise ciphertext 2 048 o (`Small`) and 32 768 o (`Large`); Noise tag 16 o.
 - Decoders never panic on any input and return one opaque `CoreError` variant per category (no oracle detail on the wire).
 - Unknown envelope `type`, unknown `v`, unknown CBOR fields, or trailing bytes → reject.
-- Commits: conventional style, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Work on branch `feat/p1-core`.
+- Commits: conventional style. Work on branch `feat/p1-core`.
 - Docs are in French; code, identifiers and comments in English.
 
 ## Review Focus

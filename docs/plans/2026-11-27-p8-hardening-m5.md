@@ -1,7 +1,5 @@
 # P8 — Durcissement, exploitation, dossier jury (M5) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** The node resists hostile input and overload. It leaks nothing in its logs. Its release can be rebuilt bit for bit. It installs as a service on Linux and on Windows. The jury has a file that explains, proves and demonstrates (spec §10, §12, M5).
 
 **Architecture:**
