@@ -206,8 +206,10 @@ Le serveur ne peut pas masquer votre trafic montant : c'est à l'app de le faire
    (`sizes(SMALL).maxSurbsPerSubscribe`). Chaque SURB est créé avec
    `replyRoute(nodes, gw, replique, 100)`.
 2. **Le serveur garde au plus 32 SURB par boîte** (et 100 000 par nœud). `until` est ramené à
-   24 h au plus. Un `until <= now` **désabonne**. Les rejets sont silencieux.
-3. **À chaque PUT accepté**, la réplique consomme **un** SURB et vous envoie :
+   24 h au plus. Un `until <= now` **désabonne**. Les rejets sont silencieux. Quand le stock d'une
+   boîte est plein, chaque nouveau SURB **évince le plus ancien** (écart E23).
+3. **À chaque PUT accepté**, la réplique consomme **un** SURB, **le plus récent** (E23), et vous
+   envoie :
    - `Push { mailboxId, blobs: [{ id, blob }] }` si le blob tient dans une réponse `Small` ;
    - sinon `Notify { mailboxId, pending }` : faites un `FETCH`.
 4. **Réapprovisionnez** : après chaque push reçu, renvoyez un `SUBSCRIBE`. Il passe dans votre

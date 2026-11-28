@@ -40,11 +40,18 @@ struct Subscriptions {
 }
 
 impl Subscriptions {
-    /// Add SURBs up to the caps; the excess is dropped silently.
+    /// Add SURBs. A full mailbox stock evicts its oldest SURBs: the newest
+    /// are the likeliest to reach the phone's current link (a phone that
+    /// reconnects gets a new inbox, so its older SURBs lead nowhere). Past
+    /// the node-wide cap, the excess is dropped silently.
     fn add(&mut self, mailbox_id: [u8; 32], surbs: Vec<Vec<u8>>, until: u64) {
         let q = self.by_box.entry(mailbox_id).or_default();
         for surb in surbs {
-            if q.len() >= MAX_SURBS_PER_BOX || self.total >= MAX_SURBS_TOTAL {
+            if q.len() >= MAX_SURBS_PER_BOX {
+                q.pop_front();
+                self.total -= 1;
+            }
+            if self.total >= MAX_SURBS_TOTAL {
                 break;
             }
             q.push_back((surb, until));
@@ -65,11 +72,11 @@ impl Subscriptions {
         self.by_box.contains_key(mailbox_id)
     }
 
-    /// Oldest SURB still valid at `now`, if any.
+    /// Newest SURB still valid at `now`, if any (last in, first used).
     fn take(&mut self, mailbox_id: &[u8; 32], now: u64) -> Option<Vec<u8>> {
         let q = self.by_box.get_mut(mailbox_id)?;
         let mut found = None;
-        while let Some((surb, until)) = q.pop_front() {
+        while let Some((surb, until)) = q.pop_back() {
             self.total -= 1;
             if until > now {
                 found = Some(surb);
@@ -555,8 +562,24 @@ mod tests {
             .flat_map(|i| s.handle(put(&k, b"m", 20 + i), NOW))
             .map(|r| r.surb)
             .collect();
-        assert_eq!(used, surbs(2, 0x40));
+        // Newest first.
+        assert_eq!(used, surbs(2, 0x40).into_iter().rev().collect::<Vec<_>>());
         assert_eq!(s.subscribed_surbs(&k.mailbox_id()), 0);
+    }
+
+    #[test]
+    fn full_stock_keeps_the_newest_surbs() {
+        let mut s = MailboxService::new(&Limits::default());
+        let k = keys();
+        // An old link's SURBs fill the stock, then the phone reconnects.
+        for i in 0..11u8 {
+            s.handle(subscribe(&k, &k, surbs(3, 0x10 + i), NOW + 600, i), NOW);
+        }
+        assert_eq!(s.subscribed_surbs(&k.mailbox_id()), MAX_SURBS_PER_BOX);
+        s.handle(subscribe(&k, &k, surbs(3, 0x7E), NOW + 600, 99), NOW);
+        assert_eq!(s.subscribed_surbs(&k.mailbox_id()), MAX_SURBS_PER_BOX);
+        let r = s.handle(put(&k, b"m", 50), NOW);
+        assert_eq!(r[0].surb, surbs(3, 0x7E)[2], "the newest SURB is used");
     }
 
     #[test]

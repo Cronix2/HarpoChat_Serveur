@@ -311,3 +311,94 @@ async fn phone_loop_comes_back_across_the_mesh() {
     let plain = sphinx::open_forward_payload(&payload).unwrap();
     assert_eq!(envelope::decode(&plain).unwrap(), Message::Loop);
 }
+
+/// SUBSCRIBE `n` fresh SURBs on every replica that is not `gw`; returns
+/// their ids and recoveries.
+async fn subscribe_all(
+    c: &mut Client,
+    cands: &[Candidate],
+    gw: &[u8; 32],
+    replicas: &[[u8; 32]],
+    k: &MailboxKeys,
+    n: usize,
+) -> Vec<([u8; 16], SurbRecovery)> {
+    let mut out = Vec::new();
+    for r in replicas.iter().filter(|r| *r != gw) {
+        let mut surbs = Vec::new();
+        for _ in 0..n {
+            let route = reply(cands, gw, r);
+            let id = random_bytes();
+            let (surb, rec) =
+                sphinx::create_surb(&route.hops, c.inbox, id, &route.delays_ms).unwrap();
+            surbs.push(surb);
+            out.push((id, rec));
+        }
+        let until = now() + 600;
+        let unsigned = Message::Subscribe {
+            mailbox_id: k.mailbox_id(),
+            read_auth: sign_read(k, ReadOp::Subscribe, b"", now(), [0; 16]),
+            surbs: surbs.clone(),
+            until,
+        };
+        let (op, bound) = envelope::read_bound(&unsigned).unwrap();
+        let sub = Message::Subscribe {
+            mailbox_id: k.mailbox_id(),
+            read_auth: sign_read(k, op, &bound, now(), random_bytes()),
+            surbs,
+            until,
+        };
+        send(c, &forward(cands, gw, r), &sub).await;
+    }
+    out
+}
+
+/// A phone reconnects (new inbox) and subscribes again: the next PUSH
+/// reaches its current link, through one of its current SURBs (3 nodes,
+/// same gateway for both phones, as on the real test mesh).
+#[tokio::test]
+async fn push_after_reconnect_uses_current_surbs() {
+    let mesh = start_mesh(3, fast_cover()).await;
+    let roots: Vec<[u8; 32]> = mesh.iter().map(|m| m.id).collect();
+    let nodes = directory(&mesh[0], &roots, 3).await;
+    let cands: Vec<Candidate> = nodes.iter().map(Candidate::from).collect();
+    let gw = mesh[0].id;
+    let k = MailboxKeys::derive(&random_bytes(), epoch_of(now()));
+    let replicas = path::mailbox_nodes(&k.mailbox_id(), &cands, MAILBOX_REPLICAS);
+
+    let mut first = Client::connect(mesh[0].addr, hop_of(&cands, &gw))
+        .await
+        .unwrap();
+    subscribe_all(&mut first, &cands, &gw, &replicas, &k, 3).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    drop(first);
+
+    let mut bob = Client::connect(mesh[0].addr, hop_of(&cands, &gw))
+        .await
+        .unwrap();
+    let current = subscribe_all(&mut bob, &cands, &gw, &replicas, &k, 3).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let mut alice = Client::connect(mesh[0].addr, hop_of(&cands, &gw))
+        .await
+        .unwrap();
+    for r in replicas.iter().filter(|r| **r != gw) {
+        let msg = Message::Put {
+            mailbox_id: k.mailbox_id(),
+            write_auth: sign_put(&k, b"after reconnect", random_bytes()),
+            blob: b"after reconnect".to_vec(),
+        };
+        send(&mut alice, &forward(&cands, &gw, r), &msg).await;
+    }
+    let (id, payload) = next_deliver(&mut bob, Duration::from_secs(5))
+        .await
+        .expect("a push on the current link");
+    let (_, rec) = current
+        .iter()
+        .find(|(i, _)| *i == id)
+        .expect("one of the current SURBs");
+    let plain = sphinx::recover_reply(rec, &payload).unwrap();
+    assert!(matches!(
+        envelope::decode(&plain).unwrap(),
+        Message::Push { .. }
+    ));
+}
