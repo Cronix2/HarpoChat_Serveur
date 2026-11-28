@@ -2,20 +2,27 @@ name: Release
 
 # Publishes compiled releases, with no tag to create by hand:
 #
-# - every merge into main  → pre-release "latest" (replaced each time):
-#   the three server binaries + the Android library, built from that commit;
+# - every merge into main  → a numbered release vX.Y.Z, created by this
+#   workflow: the version of Cargo.toml if it has no release yet, otherwise
+#   the last release + 1 on the patch number (raise the version in
+#   Cargo.toml to move to a new minor or major); documentation-only merges
+#   publish nothing;
 # - "Run workflow" button   → a numbered release vX.Y.Z (the version typed,
-#   or the one in Cargo.toml); the workflow creates the tag itself;
+#   or the one in Cargo.toml);
 # - a pushed tag v*         → that numbered release (optional).
 #
-# Every release carries SHA256SUMS, signed keylessly with Sigstore cosign
-# (GitHub OIDC): anyone can check the files were built by this workflow, and
-# rebuild the Linux binaries byte for byte (scripts/verify-release.sh).
+# Every release carries the three server binaries, the Android library and
+# SHA256SUMS, signed keylessly with Sigstore cosign (GitHub OIDC): anyone can
+# check the files were built by this workflow, and rebuild the Linux
+# binaries byte for byte (scripts/verify-release.sh).
 
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   workflow_dispatch:
     inputs:
       version:
@@ -38,31 +45,42 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.p.outputs.tag }}
-      prerelease: ${{ steps.p.outputs.prerelease }}
       title: ${{ steps.p.outputs.title }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the existing tags, to number the release
       - id: p
         shell: bash
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          short="${GITHUB_SHA:0:7}"
+          semver='^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'
+          cargo_v="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             v="${INPUT_VERSION#v}"
-            [ -n "$v" ] || v="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
-            echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$' \
-              || { echo "version invalide : $v"; exit 1; }
-            tag="v$v"; pre=false; title="harpochat $tag"
+            [ -n "$v" ] || v="$cargo_v"
           elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            tag="$GITHUB_REF_NAME"; pre=false; title="harpochat $tag"
+            v="${GITHUB_REF_NAME#v}"
           else
-            tag="latest"; pre=true; title="harpochat — dernière version de main ($short)"
+            # Merge into main: next version after the last numbered release.
+            last="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)"
+            last="${last#v}"; last="${last%%[-+]*}"
+            if [ -z "$last" ] || [ "$(printf '%s\n%s\n' "$last" "$cargo_v" | sort -V | tail -1)" != "$last" ]; then
+              v="$cargo_v"
+            else
+              IFS=. read -r ma mi pa <<< "$last"
+              v="$ma.$mi.$((pa + 1))"
+            fi
+          fi
+          echo "$v" | grep -Eq "$semver" || { echo "version invalide : $v"; exit 1; }
+          tag="v$v"
+          if [ "$GITHUB_REF_TYPE" != "tag" ] && git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "la release $tag existe déjà"; exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
-          echo "title=$title" >> "$GITHUB_OUTPUT"
-          echo "→ $title"
+          echo "title=harpochat $tag" >> "$GITHUB_OUTPUT"
+          echo "→ harpochat $tag (commit ${GITHUB_SHA:0:7})"
 
   server:
     name: server ${{ matrix.artifact }}
@@ -191,7 +209,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
           TITLE: ${{ needs.plan.outputs.title }}
-          PRE: ${{ needs.plan.outputs.prerelease }}
         run: |
           cat > notes.md <<EOF
           Compilé depuis le commit ${GITHUB_SHA} par ce workflow.
@@ -206,12 +223,8 @@ jobs:
           Vérification : \`SHA256SUMS\` est signé par Sigstore, voir docs/operators/install.md,
           ou \`scripts/verify-release.sh ${TAG}\` (signature + recompilation à l'identique).
           EOF
-          if [ "$PRE" = "true" ]; then
-            # Rolling pre-release: replace the previous one.
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
-            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --prerelease --title "$TITLE" --notes-file notes.md
-          else
-            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "$TITLE" --notes-file notes.md --generate-notes
-          fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TITLE" --notes-file notes.md --generate-notes --latest
+          # The former rolling pre-release "latest" is replaced by these
+          # numbered releases: remove it if it is still there.
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true

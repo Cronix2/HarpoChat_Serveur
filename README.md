@@ -36,9 +36,11 @@ Installer un nœud : [`docs/operators/install.md`](docs/operators/install.md).
 ## Télécharger
 
 Les binaires compilés sont sur la page [Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases) :
-**`latest`** est reconstruite automatiquement à chaque modification de `main` (serveur Windows,
-Linux x86_64, Linux ARM, et bibliothèque Android) ; une version numérotée se publie avec le bouton
-*Run workflow* du workflow **Release** (onglet *Actions*).
+chaque fusion dans `main` publie automatiquement une version numérotée **`vX.Y.Z`** (serveur
+Windows, Linux x86_64, Linux ARM, et bibliothèque Android). Le numéro de correctif augmente à chaque
+fusion ; pour passer à une nouvelle version mineure ou majeure, il suffit de relever `version` dans
+`Cargo.toml`. Une fusion qui ne touche que la documentation ne publie rien. Le bouton *Run workflow*
+du workflow **Release** (onglet *Actions*) reste disponible pour publier une version précise.
 
 ## Construire et tester
 

@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "harpochat-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake2 0.11.0",
  "ciborium",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "harpochat-core-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "harpochat-core",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "harpochat-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "clap",
