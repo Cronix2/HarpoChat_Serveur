@@ -17,10 +17,9 @@
 ## 1. Télécharger et vérifier
 
 Sur la page [Releases](https://github.com/Cronix2/HarpoChat_Serveur/releases), récupérez le binaire
-de votre machine, ainsi que `SHA256SUMS` et `SHA256SUMS.cosign.bundle`. Il y a deux sortes de releases :
-
-- **`latest`** (pré-release) : reconstruite automatiquement à chaque modification de `main` ;
-- **`vX.Y.Z`** : les versions numérotées, publiées par le porteur du projet.
+de votre machine, ainsi que `SHA256SUMS` et `SHA256SUMS.cosign.bundle`. Chaque modification de
+`main` publie automatiquement une version numérotée **`vX.Y.Z`** ; la plus récente porte le badge
+*Latest*.
 
 | Machine | Fichier |
 |---|---|

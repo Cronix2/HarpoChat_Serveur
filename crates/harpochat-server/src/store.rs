@@ -346,7 +346,9 @@ mod tests {
 
     #[test]
     fn replay_filter_rotates_when_full() {
-        let mut f = ReplayFilter::new(100, 1e-4);
+        // Bit positions are keyed at random per run: a rate low enough that a
+        // false positive never makes this test flaky (about 1 run in 10⁷).
+        let mut f = ReplayFilter::new(100, 1e-9);
         let tag = |i: u32| harpochat_core::hash::h(&[&i.to_be_bytes()]);
         for i in 0..100 {
             assert!(f.insert_new(&tag(i)));
