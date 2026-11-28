@@ -222,6 +222,45 @@ Le serveur ne peut pas masquer votre trafic montant : c'est à l'app de le faire
 Latence mesurée en test (5 nœuds, liens à 50 /s, téléphone à 20 /s) : **moins de 2 s** entre
 la PUT et le PUSH. Avec λ = 1 /s, comptez environ 1 s de plus.
 
+## 9. Chiffrement de bout en bout : Olm (vodozemac)
+
+Votre demande du design N2 (2026-11-28) est faite telle quelle. Les objets `OlmAccount` et
+`OlmSession` exposent vodozemac 0.11 (Apache-2.0), en Olm v1, compatible libolm. Le code est
+pur, sans E/S. Le serveur n'en voit rien : un message Olm est le contenu d'un blob.
+
+```kotlin
+// Une fois par appareil, puis stockez le pickle (chiffré par la clé de 32 o que vous fournissez).
+val account = OlmAccount()                       // ou OlmAccount.fromPickle(bytes, key)
+account.generateOneTimeKeys(1u)                  // 1 à 50 clés par appel
+val myIdentity = account.identityKey()           // 32 o, dans la demande / l'acceptation d'appairage
+val myOtk = account.oneTimeKeys().first()        // 32 o, idem
+account.markKeysAsPublished()
+
+// A (qui a reçu identityKey + oneTimeKey de B) ouvre la session :
+val s = account.createOutboundSession(theirIdentity, theirOtk)
+val m = s.encrypt(plaintext)                     // OlmEncrypted(msgType, body)
+
+// B, à la réception du premier message (msgType == 0) :
+val inbound = account.createInboundSession(theirIdentity, m.body)   // .session, .plaintext
+// → re-pickler le compte : la clé à usage unique a été consommée.
+
+// Ensuite, des deux côtés :
+session.decrypt(msgType, body)                   // désordre accepté ; rejeu et falsification refusés
+session.pickle(key)                              // après chaque encrypt/decrypt
+```
+
+- **Tailles mesurées** : avec un texte de 1 000 o, le message pré-clé fait 1 162 o et le message
+  normal 1 056 o (test `a_1000_byte_text_fits_a_blob`). Le surcoût est de 154 o pour le
+  pré-clé et 48 o pour le normal, plus le bourrage AES-CBC à 16 o. Dans un blob de 1 400 o, le
+  texte peut donc aller jusqu'à environ 1 230 o.
+- **Pré-clé tant que l'autre n'a pas répondu** : les messages de A restent de type 0 jusqu'à ce
+  qu'il ait déchiffré une réponse de B. Côté réception, essayez d'abord `decrypt` sur la session
+  existante ; s'il échoue et que `msgType == 0`, faites `createInboundSession`.
+- **Erreurs** : `BadSignature` pour un message falsifié ou rejoué, une mauvaise clé de pickle, ou
+  une identité d'expéditeur qui ne correspond pas. `Malformed` pour des octets illisibles.
+  `InvalidArgument` pour une clé qui ne fait pas 32 o.
+- **Poids** : environ 350 Ko par ABI dans `libcorekit.so`.
+
 ## 5. Ce qui arrive ensuite
 
 | Phase | Pour vous |
@@ -232,3 +271,4 @@ la PUT et le PUSH. Avec λ = 1 /s, comptez environ 1 s de plus.
 | P6 | **Fait** : voir §8. Trames `Padding` à ignorer, `CoverRate`, SUBSCRIBE / PUSH, loops. |
 | P7 | **Fait**, rien à changer côté app : les annuaires listent aussi les nœuds parrainés, avec leur chaîne de `Vouch`. `verifyDirectory` vérifie les chaînes jusqu'aux racines embarquées, les révocations et la limite de 3 parrainages par 30 jours. Le champ `sponsor` de `FfiNode` sert déjà à la diversité des chemins. |
 | P8 | **Fait**. Un point à respecter : la **clé Sphinx de chaque nœud change tous les 7 jours** (l'ancienne reste acceptée 7 jours de plus) et un descripteur expire après 24 h. Rafraîchissez l'annuaire au moins une fois par jour, et à chaque reconnexion, avant de construire routes et SURB. Un paquet construit pour une clé vieille de plus de deux semaines est jeté sans réponse. |
+| N2 (Olm) | **Fait** : voir §9. `OlmAccount` / `OlmSession` (vodozemac), à la place de `PairCipher`. |
