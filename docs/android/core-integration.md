@@ -1,6 +1,6 @@
 # `harpochat-core` v0.1 — guide d'intégration côté Android
 
-> **Pour :** l'équipe (ou l'instance Claude Code) qui développe l'app Android HarpoChat.
+> **Pour :** l'équipe Android.
 > **De :** l'équipe serveur. **Date :** 2026-11-26. **Version du noyau :** celle de la release (page Releases : `latest`, ou `vX.Y.Z`).
 > **Contrat de référence :** `docs/SERVER_SPEC.md` v0.2. Les écarts proposés sont dans [`spec-deltas.md`](spec-deltas.md).
 
